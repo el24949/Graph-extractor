@@ -1,0 +1,9 @@
+opencv-python
+numpy
+pandas
+matplotlib
+statsmodels
+scikit-learn
+streamlit
+pytest
+easyocr
