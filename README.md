@@ -110,6 +110,35 @@ all of their training data. The number of windows overstates how much
 evidence there is, so small differences between models should not be read as
 meaningful.
 
+### Step 7: Forecast risk, P(wrong)
+
+`src/risk.py` attaches a chance of being wrong to each forecast point.
+
+- **What "wrong" means.** A forecast point is wrong if its error is more than
+  a chosen tolerance, `tol_pct` (default 10% of the training range, the same
+  scale as Step 6).
+- **P(wrong) per step ahead.** From the rolling validation errors, P(wrong)
+  is the share of windows where that step was wrong. It is computed separately
+  for each of the 10 steps ahead, since forecasts further out miss more often.
+- **Bootstrap over windows.** The 95% confidence interval comes from
+  resampling whole windows (rows of the error table) 2,000 times with a fixed
+  seed, so the result is reproducible.
+- **Model selection.** `forecast_with_risk` runs all three models, picks the
+  one with the lowest mean rolling error, forecasts the next 10 points with
+  it, and reports P(wrong) with its interval for each point.
+
+Limitations:
+
+- **The interval is too narrow.** Windows overlap (Step 6), so they are not
+  independent, and the bootstrap treats them as if they were.
+- **The model is chosen on the same errors used to score it.** The winner's
+  P(wrong) is likely a bit better than it will be on new data.
+- **It assumes the future behaves like the past.** If the series changes
+  behaviour after the end of the chart, the numbers no longer apply.
+- **It is an estimate, not an exact probability.** P(wrong) is a share of past
+  windows. When no window was wrong at some step, P(wrong) and its interval
+  are both 0, which only means no misses were seen, not that none can happen.
+
 ## Install
 
 <!-- TODO -->
