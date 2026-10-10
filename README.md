@@ -80,8 +80,12 @@ matrix `(windows, h)` is kept, not just the mean.
   (default 10% of the range).
 - **P(wrong)** = fraction of validation errors above the tolerance, computed
   **per forecast step**, because 1 step ahead is much easier than 10.
-- **95% confidence interval** by bootstrap over windows (2000 resamples,
-  fixed seed).
+- **95% confidence intervals**, two kinds:
+  - **Per step: Wilson score interval.** Each step's P(wrong) is a count of
+    misses out of the windows, so Wilson gives a sensible interval even when
+    there are 0 misses (a bootstrap would collapse to [0, 0] there).
+  - **Overall: bootstrap over windows** (2000 resamples of whole windows,
+    fixed seed), since the overall rate pools all steps of a window together.
 - The model with the lowest rolling error is chosen per chart.
 
 ## 4. Results
@@ -122,22 +126,24 @@ model captures. One chart with overlapping windows is an example, not a
 model ranking.
 
 ### 4.3 Risk output
-chart_04, tolerance 10% of the range. Chosen model: **naive**. Overall P(wrong) 0.61, 95% CI [0.53, 0.68].
+chart_04, tolerance 10% of the range. Chosen model: **naive**.
+Overall P(wrong) 0.61, 95% CI [0.53, 0.68] (bootstrap).
 
-| step | P(wrong) | 95% CI |
+| step | P(wrong) | 95% CI (Wilson) |
 |---:|---:|---|
-| 1 | 0.00 | [0.00, 0.00] |
-| 2 | 0.39 | [0.23, 0.58] |
-| 3 | 0.45 | [0.29, 0.65] |
-| 4 | 0.71 | [0.55, 0.87] |
-| 5 | 0.71 | [0.55, 0.87] |
-| 6 | 0.77 | [0.61, 0.90] |
-| 7 | 0.74 | [0.58, 0.90] |
-| 8 | 0.77 | [0.61, 0.90] |
-| 9 | 0.71 | [0.55, 0.87] |
-| 10 | 0.81 | [0.65, 0.94] |
+| 1 | 0.00 | [0.00, 0.11] |
+| 2 | 0.39 | [0.24, 0.56] |
+| 3 | 0.45 | [0.29, 0.62] |
+| 4 | 0.71 | [0.53, 0.84] |
+| 5 | 0.71 | [0.53, 0.84] |
+| 6 | 0.77 | [0.60, 0.89] |
+| 7 | 0.74 | [0.57, 0.86] |
+| 8 | 0.77 | [0.60, 0.89] |
+| 9 | 0.71 | [0.53, 0.84] |
+| 10 | 0.81 | [0.64, 0.91] |
 
-At step 1 the interval is [0, 0] because no misses were seen in 31 windows. That does not mean zero risk.
+At step 1 no misses were seen in 31 windows, so P(wrong) is 0, but the Wilson
+interval still allows up to 11%. Zero observed misses does not mean zero risk.
 
 Risk climbs from 0% at step 1 to about 80% at step 10 for this chart.
 
@@ -153,8 +159,10 @@ Risk climbs from 0% at step 1 to about 80% at step 10 for this chart.
 - Per-column median flattens sharp spikes.
 - ARIMA(1,1,1) has no drift; on long horizons it may flatten.
 - No seasonality modeling.
-- **Rolling windows overlap** (`step=2 < h=10`), so they are not independent
-  and the confidence interval is optimistic.
+- **Rolling windows overlap** (`step=2 < h=10`), so they are not independent.
+  Both intervals assume they are: the per-step Wilson interval treats each
+  window as an independent trial, and the overall bootstrap resamples windows
+  as if independent. Both are therefore too narrow (optimistic).
 - The best model is selected on the same errors used to estimate P(wrong),
   which makes the estimate slightly optimistic.
 - P(wrong) is an **empirical estimate**, not an exact probability. It

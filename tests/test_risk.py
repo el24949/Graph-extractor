@@ -1,4 +1,7 @@
-"""Tests for P(wrong) and its bootstrap confidence intervals in src/risk.py."""
+"""Tests for P(wrong) and its confidence intervals in src/risk.py.
+
+Per-step intervals are Wilson; the overall interval is a bootstrap over windows.
+"""
 
 import json
 from pathlib import Path
@@ -8,13 +11,24 @@ import pytest
 
 from src.forecast import MODELS, resample_series
 from src.pipeline import extract_series
-from src.risk import bootstrap_ci, forecast_with_risk, p_wrong, p_wrong_by_horizon
+from src.risk import bootstrap_ci, forecast_with_risk, p_wrong, p_wrong_by_horizon, wilson_ci
 
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "samples"
 
 # 4 windows x 2 horizons. With tol 10, the wrong ones are 20, 30, 40:
 # 3 of 8 overall, 0/4 at horizon 1, 3/4 at horizon 2.
 KNOWN = np.array([[1, 20], [2, 30], [3, 5], [4, 40]], dtype=float)
+
+# Wilson bounds can land a rounding error (~1e-16) past p at p = 0 or 1
+# (e.g. upper = 0.9999999999999999 when p = 1), so containment uses this slack.
+EPS = 1e-12
+
+
+def errors_with_misses(misses, n_windows, h=1, tol=10.0):
+    """Error matrix where the first `misses` windows exceed tol at every step."""
+    errors = np.zeros((n_windows, h))
+    errors[:misses] = tol + 1
+    return errors
 
 
 def test_known_case():
@@ -48,6 +62,30 @@ def test_same_seed_same_ci():
     np.testing.assert_array_equal(first[1], second[1])
 
 
+def test_wilson_zero_misses_out_of_31():
+    lo, hi = wilson_ci(errors_with_misses(0, 31, h=10), 10)
+    np.testing.assert_allclose(lo, 0, atol=EPS)
+    assert np.all((0.10 < hi) & (hi < 0.12))
+
+
+@pytest.mark.parametrize("n_windows", [1, 4, 31, 200])
+def test_wilson_contains_point_estimate(n_windows):
+    for misses in range(n_windows + 1):
+        errors = errors_with_misses(misses, n_windows)
+        lo, hi = wilson_ci(errors, 10)
+        p = p_wrong_by_horizon(errors, 10)
+        assert np.all(lo <= p + EPS) and np.all(p <= hi + EPS), f"{misses}/{n_windows}: [{lo}, {hi}] vs {p}"
+        assert np.all((0 <= lo) & (lo <= hi) & (hi <= 1))
+
+
+def test_wilson_known_case():
+    lo, hi = wilson_ci(KNOWN, 10)
+    p = p_wrong_by_horizon(KNOWN, 10)
+    assert np.all(lo <= p + EPS) and np.all(p <= hi + EPS)
+    # Unlike the bootstrap, 0 misses out of 4 still gives a non-zero upper bound.
+    assert hi[0] > 0
+
+
 # A silent fallback to naive would change which model wins, so fail on it.
 @pytest.mark.filterwarnings("error:.*using naive forecast")
 def test_forecast_with_risk_on_chart_04():
@@ -70,5 +108,12 @@ def test_forecast_with_risk_on_chart_04():
 
     assert result["model"] in MODELS
     assert result["forecast"].shape == result["p_wrong"].shape == (10,)
-    assert np.all((0 <= result["ci_low"]) & (result["ci_low"] <= result["p_wrong"]))
-    assert np.all((result["p_wrong"] <= result["ci_high"]) & (result["ci_high"] <= 1))
+    lo, hi, p = result["ci_low"], result["ci_high"], result["p_wrong"]
+    assert np.all((0 <= lo) & (lo <= p + EPS)) and np.all((p <= hi + EPS) & (hi <= 1))
+
+    # Per-step CIs are Wilson: step 1 has 0 misses in 31 windows, so the
+    # upper bound is about 0.11, not the bootstrap's degenerate 0.
+    assert p[0] == 0
+    assert 0.10 < hi[0] < 0.12
+    # The overall CI is still the bootstrap over windows.
+    assert lo_all <= result["p_wrong_overall"] <= hi_all
