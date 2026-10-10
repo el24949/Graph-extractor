@@ -68,6 +68,29 @@ meta files, and only to get the axis limits. `src/overlay.py` draws the
 extracted line in red on top of each chart so you can check it by eye; the
 images are in `docs/overlays/`.
 
+### Step 5: Forecasting
+
+`src/forecast.py` has three simple models. Each one takes the training values
+and a horizon `h` and returns `h` predictions:
+
+- **naive**: repeats the last value. The baseline the others must beat.
+- **ets**: Holt's exponential smoothing with an additive trend and no
+  seasonality.
+- **arima**: ARIMA(1,1,1).
+
+If a statsmodels model fails to fit, gives a convergence warning or returns
+NaN, it falls back to the naive forecast and prints a warning, so one bad fit
+does not stop a run.
+
+**Why resample first.** The extracted series has one point per pixel column,
+so its length depends on the image width (430 to 1,110 points on the samples), and
+many of those points are just interpolated between neighbours.
+`resample_series` puts every chart onto the same number of evenly spaced
+points (100 by default). The models assume equal steps, and a fixed length
+makes results comparable across charts.
+
+Rolling validation of the forecasts is not done yet.
+
 ## Install
 
 <!-- TODO -->
