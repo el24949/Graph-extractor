@@ -147,11 +147,47 @@ interval still allows up to 11%. Zero observed misses does not mean zero risk.
 
 Risk climbs from 0% at step 1 to about 80% at step 10 for this chart.
 
-## 5. Assumptions and limitations
+## 5. Real-chart test
+
+**What we tried.** After the synthetic results, the unchanged pipeline was run
+on five real chart screenshots (`samples/real/`): a stock index, NOAA global
+temperatures, an Excel rainfall chart, a matplotlib chart with two lines, and
+a speed-time graph with markers and a dense grid. No code was changed for
+this test.
+
+**Result: it failed on all five.** Three stopped with "Could not find both
+axis lines". The other two ran but returned an invalid plot box, so their
+output is not usable.
+
+| chart | result | cause |
+|---|---|---|
+| `real_01` | failed (error) | No axis lines, only light gridlines |
+| `real_02` | failed (wrong output) | Black bar at the top of the screenshot taken as the x-axis; two lines, logo and legend in the plot |
+| `real_03` | failed (error) | No axis lines, only gridlines |
+| `real_04` | failed (wrong output) | Screenshot frame taken as both axes; two lines, so the median jumps between them |
+| `real_05` | failed (error) | Axes are mid-grey, lighter than the dark-pixel threshold |
+
+Details in `docs/real_results.md`; overlays in `docs/overlays/real/`.
+
+![real_02: the extracted line (red) follows the red series in places but drops onto the logo and legend](docs/overlays/real/real_02_overlay.png)
+
+**Why.** Plot-area detection assumes solid, dark axis lines and nothing
+darker or longer in the image. Real charts often have no axis lines, grey
+axes, or screenshot borders. Line isolation assumes exactly one coloured line
+and nothing else coloured inside the plot. Real charts have several lines,
+legends, logos and filled areas.
+
+**This is an honest limitation.** This version was built and tested only on
+synthetic charts, and the 1-5% extraction errors in section 4 only hold for
+charts like those. It is not yet a tool for arbitrary real charts.
+
+## 6. Assumptions and limitations
 
 - **Axis values are supplied, not read.** OCR of tick labels is not
   implemented; the user (or tests) provides two reference values per axis.
 - Single line, line chart, mostly white background, numeric x-axis.
+- **Fails on real charts.** All five real screenshots tested failed (section 5):
+  no axis lines, grey axes, screenshot borders, and multiple lines all break it.
 - Test charts hide the top/right border, so plot-area detection is easier
   than on real charts with a full box.
 - Black/gray lines depend on the dark-pixel fallback; dark text or markers
@@ -168,7 +204,7 @@ Risk climbs from 0% at step 1 to about 80% at step 10 for this chart.
 - P(wrong) is an **empirical estimate**, not an exact probability. It
   assumes the future behaves like the past.
 
-## 6. Install and usage
+## 7. Install and usage
 
 ### Install
 
@@ -225,17 +261,18 @@ Other commands:
 - `python -m src.overlay`: overlay images, saved to `docs/overlays/`
 - `pytest`: run the tests
 
-## 7. Repository layout
+## 8. Repository layout
 
 ```
 app.py      Streamlit web app
 src/        extract, calibrate, pipeline, forecast, validate, risk, evaluate, overlay
 tests/      pytest suites
 samples/    synthetic charts + truth CSV + meta JSON
-docs/       results table, overlays
+samples/real/  five real chart screenshots (section 5)
+docs/       results tables (synthetic, real), overlays
 ```
 
-## 8. Development process
+## 9. Development process
 
 Built with Claude Code as an assistant. I designed the pipeline and the
 validation approach, set the evaluation rules (extraction never reads the
