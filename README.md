@@ -89,7 +89,26 @@ many of those points are just interpolated between neighbours.
 points (100 by default). The models assume equal steps, and a fixed length
 makes results comparable across charts.
 
-Rolling validation of the forecasts is not done yet.
+### Step 6: Rolling validation
+
+`src/validate.py` tests each model the way it would be used: forecasting a
+future it has not seen.
+
+- **Expanding window.** At each cut point the model trains on everything
+  before it and forecasts the next `h = 10` points. The first cut is after
+  `min_train = 30` points, then it moves forward `step = 2` points at a time,
+  so the training window keeps growing.
+- **Error as a % of the training range.** Each absolute error is divided by
+  the range (max - min) of that window's training data. This puts charts with
+  different scales on the same footing.
+- **Results per step ahead.** `summarize` reports the mean error, the error at
+  each of the 10 steps ahead, and the 90th percentile.
+
+**Windows overlap, so they are not independent.** With `step = 2` and
+`h = 10`, neighbouring windows share most of their forecast points and almost
+all of their training data. The number of windows overstates how much
+evidence there is, so small differences between models should not be read as
+meaningful.
 
 ## Install
 
