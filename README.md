@@ -260,6 +260,7 @@ with several lines need a colour to be chosen.
   last anti-aliased pixel), which slightly stretches x. With the exact box
   the RMSE is lower on every chart, by up to 1.2 points (`chart_01`: 4.9% ->
   3.6%).
+- Automatic detection places the right edge 1 px too far (it picks up the axis line’s last anti-aliased pixel); known, not fixed.
 - **The box ends where the lines end.** If an axis is cut off at the image edge,
   that edge becomes the box edge, which is not a labelled value.
 - **Hidden stretches are interpolated.** Where another series is drawn over the
@@ -317,6 +318,19 @@ Then open the URL it prints (usually http://localhost:8501).
    until the green box in the live preview sits on the plot area, ideally on
    gridlines or tick marks whose values you know, and enter those values as
    the axis values in step 2.
+
+**Manual plot box: how it works and what it costs.**
+
+Automatic detection can fail on real charts (no axes, a fill hiding the gridlines, an axis cut off by the image edge). In that case the app shows the error and switches to Manual mode: the user sets the plot box (left, top, right, bottom in pixels) over a live preview.
+
+Design choice: I kept a human-in-the-loop fallback instead of guessing. A wrong automatic box silently gives wrong numbers; a manual box makes the assumption visible.
+
+What the box means: its edges are taken as the axis limits you type, so calibration is only as good as the box placement. On real_01, 1 px is about 2 index points, so a box placed by eye is less precise than one measured from tick positions.
+
+Not validated numerically on real charts: real-chart results are judged visually (no ground truth). The synthetic tests show a manual box equal to the true box is never worse than auto.
+
+Future work: calibrate from two labeled gridlines instead of the box edges, which removes this dependence.
+
 4. Pick the line to extract. The sidebar shows a swatch for each line colour
    found in the plot area; choose one, or "Auto" to use all coloured pixels
    (a black or gray line has no swatch and uses the dark fallback).
