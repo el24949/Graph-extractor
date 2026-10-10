@@ -51,6 +51,23 @@ to `ymax` as the references handles this automatically.
 For now the axis limits come from the meta files. Reading them from the tick
 labels is a later step.
 
+### Step 4: Full pipeline and evaluation
+
+`extract_series` in `src/pipeline.py` runs Steps 3A to 3C on one image. Give it
+the axis limits to get data values, or leave them out to get pixel positions.
+It also returns the mode (`color` or `dark`) and the detected box. It never
+reads the meta files. The same thing is available from the command line:
+
+```
+python -m src.pipeline chart.png --xmin 0 --xmax 99 --ymin 40 --ymax 60 --out out.csv
+```
+
+`src/evaluate.py` runs the pipeline on every sample chart and compares the
+result with the true data (see Results). It is the only code that reads the
+meta files, and only to get the axis limits. `src/overlay.py` draws the
+extracted line in red on top of each chart so you can check it by eye; the
+images are in `docs/overlays/`.
+
 ## Install
 
 <!-- TODO -->
@@ -61,7 +78,39 @@ labels is a later step.
 
 ## Results
 
-<!-- TODO -->
+**These results are on the 15 synthetic charts in `samples/`, not on real
+charts.** The synthetic charts are clean, with one line and no frame, legend
+or labels inside the plot. The axis limits are taken from the meta files, not
+read from the image. Expect real charts to do worse.
+
+Errors are a percentage of the y-axis range. Regenerate with
+`python -m src.evaluate`, which saves `docs/extraction_results.md`.
+
+| chart | mode | RMSE% | MAE% |
+|---|---|---:|---:|
+| chart_01 | color | 4.87 | 3.70 |
+| chart_02 | color | 2.32 | 1.82 |
+| chart_03 | color | 1.03 | 0.79 |
+| chart_04 | color | 0.76 | 0.60 |
+| chart_05 | color | 0.77 | 0.60 |
+| chart_06 | dark | 1.70 | 1.33 |
+| chart_07 | color | 1.81 | 1.39 |
+| chart_08 | color | 0.51 | 0.41 |
+| chart_09 | color | 2.03 | 1.47 |
+| chart_10 | color | 2.56 | 2.03 |
+| chart_11 | color | 1.75 | 1.38 |
+| chart_12 | color | 1.17 | 0.93 |
+| chart_13 | color | 1.42 | 1.05 |
+| chart_14 | dark | 1.71 | 1.28 |
+| chart_15 | color | 1.73 | 1.38 |
+| **mean** | | **1.74** | **1.34** |
+| **max** | | **4.87** | **3.70** |
+
+The worst case, `chart_01`, with the extracted line in red over the original
+(blue). Most of the line matches; the sharpest spikes show blue tips where the
+extraction cuts them short.
+
+![Extracted line over chart_01](docs/overlays/chart_01_overlay.png)
 
 ## Limitations
 
