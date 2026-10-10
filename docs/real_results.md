@@ -13,7 +13,8 @@ three times as it was improved:
    of taking the median of everything, and no longer extrapolates past the
    ends of the line. Plot-area detection unchanged.
 
-**Now: 3 worked, 1 partly, 1 still failed.** The colour used for each chart is
+**Now: 3 worked, 1 partly, and `real_01` fails on Auto but works with a manual
+plot box** (set by hand in the app or with `--box`). The colour used for each chart is
 listed; "Auto" (no colour chosen) is described where it differs.
 
 Result meanings:
@@ -32,7 +33,7 @@ and want it removed, please open an issue.
 
 | chart | what it is | source | first version | after detection fix | after line fix (now) | colour used | cause (now) |
 |---|---|---|---|---|---|---|---|
-| `real_01` | DAX index, intraday, green line with filled area | [Google Finance, DAX (DAX:INDEXDB)](https://www.google.com/finance/quote/DAX:INDEXDB) | failed (error) | failed (error) | **failed (error)** | - | Unchanged: no plot area is found, so line isolation never runs. There are no axis lines, and the light green fill under the line hides the gridlines (see the detection notes below). |
+| `real_01` | DAX index, intraday, green line with filled area | [Google Finance, DAX (DAX:INDEXDB)](https://www.google.com/finance/quote/DAX:INDEXDB) | failed (error) | failed (error) | **failed (error) on Auto; worked with a manual box** | 1 (`#046e00`, the only colour, found inside the manual box) | Automatic detection still fails (no axes; the fill hides the gridlines). With a manual box (80, 40, 810, 241), placed on the 25,200 and 24,800 labels and the 9:00 and 20:00 positions measured from the gridlines, the line is extracted correctly: about 24,980 at 9:06, a high of 25,157 at about 15:38 and about 25,087 at the end, matching the chart. The fill under the line is ignored. The result is only as good as the box: 1 px is about 2 index points. |
 | `real_02` | NOAA global temperature anomalies, two lines (blue, red) | [NOAA NCEI, Global Historical Climatology Network daily (GHCNd)](https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily) | failed (wrong output) | partly | **worked** | 1 (`#e34230`, the red v5.1.0 series) | The NOAA logo is no longer picked up: with the red colour chosen it is excluded, and even on Auto the tracker stays on the line instead of jumping to the logo. The line now ends at 2022 instead of running flat into the margin. Where the blue series is drawn over the red one, the red is hidden for a few pixels and those columns are interpolated. |
 | `real_03` | Daily rainfall, Excel-style, dates on x-axis | [Microsoft Support, "Present your data in a scatter chart or a line chart"](https://support.microsoft.com/en-us/excel/present-your-data-in-a-scatter-chart-or-a-line-chart) | failed (error) | worked | **worked** | 1 (`#205f73`, the only colour) | Unchanged box (from gridlines). The flat extension after the last point (1/9/2007) is gone: the series now ends where the data ends. The date axis still has to be entered as numbers. |
 | `real_04` | Matplotlib "Line Plot with Grid", two lines (blue, orange) | [Springer Nature, article doi:10.1007/s43545-025-01165-y](https://link.springer.com/article/10.1007/s43545-025-01165-y) | failed (wrong output) | partly | **worked (with a colour chosen)** | 2 (`#4887b2`, blue); 1 (`#ee9548`, orange) also works | Each line can now be extracted on its own by picking its colour; both follow their line. The flat ends are gone. Sharp peak tips are cut a little (spike flattening). On **Auto** it is still wrong: the tracker follows the orange line but switches to the blue one where they cross (around x = 33-36). |
@@ -44,7 +45,7 @@ as "ink", forms wide solid blocks that swallow the vertical gridlines inside
 them, and is rejected as too thick to be a line, leaving only one usable
 gridline.
 
-Overlays: `docs/overlays/real/real_XX_overlay.png` (plus
+Overlays: `docs/overlays/real/real_XX_overlay.png` (`real_01` with the manual box; plus
 `real_04_orange_overlay.png` for the orange line). The extracted line is drawn
 in red (magenta on `real_02`, whose chosen series is itself red), the green
 rectangle is the detected plot box, and the label at the top says how the box

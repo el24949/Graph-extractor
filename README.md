@@ -212,14 +212,15 @@ taken as an axis.
 
 | chart | first version | after detection fix | after line fix (now) | what is still wrong |
 |---|---|---|---|---|
-| `real_01` | failed (error) | failed (error) | **failed (error)** | No axes, and the filled area under the line hides the gridlines |
+| `real_01` | failed (error) | failed (error) | **failed (error) on Auto; worked with a manual box** | Auto still finds no plot area (no axes, fill hides the gridlines); with a manual box the line is extracted correctly (section 7, Command line) |
 | `real_02` | failed (wrong output) | partly | **worked** | Logo no longer picked up; red series extracted end to end |
 | `real_03` | failed (error) | worked | **worked** | No flat tail any more; dates must be entered as numbers |
 | `real_04` | failed (wrong output) | partly | **worked (with a colour chosen)** | Each line extracted by its colour; on Auto it still switches lines where they cross |
 | `real_05` | failed (error) | partly | **partly** | Line now right; y axis cut off at the image top, so the box top is the image edge |
 
-Now: 3 worked, 1 partly, 1 failed. Details, sources and the colour used per
-chart are in `docs/real_results.md`; overlays in `docs/overlays/real/`.
+Now: 3 worked, 1 partly, and `real_01` fails on Auto but works with a manual
+plot box. Details, sources and the colour used per chart are in
+`docs/real_results.md`; overlays in `docs/overlays/real/`.
 
 ![real_04 with the blue colour chosen: the extracted line (red) follows the blue series and ignores the orange one](docs/overlays/real/real_04_overlay.png)
 
@@ -228,7 +229,8 @@ synthetic charts. The 1-5% extraction errors in section 4 only hold for charts
 like those. Five real screenshots are a small sample: they show the main
 failure modes are now handled when the user picks the line colour, but they do
 not show it works on arbitrary real charts. `real_01` (no axes, filled area)
-still fails, and charts with several lines need a colour to be chosen.
+still fails automatically and only works with a box set by hand, and charts
+with several lines need a colour to be chosen.
 
 ## 6. Assumptions and limitations
 
@@ -248,6 +250,16 @@ still fails, and charts with several lines need a colour to be chosen.
   under the line, the gridline fallback can fail.
 - **Light backgrounds only.** Thresholds are relative to the background and
   assume dark lines on a light background; dark-mode charts are not handled.
+- **A manual box depends on the user's accuracy.** The axis values are tied to
+  the box edges, so a box that is a few pixels off shifts or stretches every
+  value (on `real_01`, 1 px is about 2 index points). Placing the edges on
+  labelled gridlines or tick marks helps; the box is only checked to be inside
+  the image, not to be on the plot area.
+- **The automatic box is about 1 px too wide on the right.** On all 15 main
+  charts the detected right edge is 1 px past the true edge (the axis line's
+  last anti-aliased pixel), which slightly stretches x. With the exact box
+  the RMSE is lower on every chart, by up to 1.2 points (`chart_01`: 4.9% ->
+  3.6%).
 - **The box ends where the lines end.** If an axis is cut off at the image edge,
   that edge becomes the box edge, which is not a labelled value.
 - **Hidden stretches are interpolated.** Where another series is drawn over the
@@ -298,14 +310,21 @@ Then open the URL it prints (usually http://localhost:8501).
 1. Upload a line chart (PNG or JPG) in the sidebar.
 2. Enter the axis values at the edges of the plot area: `xmin`, `xmax`,
    `ymin`, `ymax`. These are not read from the image.
-3. Pick the line to extract. The sidebar shows a swatch for each line colour
+3. Check the plot box. "Auto" detects it. If detection fails, the page shows
+   the error and switches to "Manual", starting from the middle 80% of the
+   image; you can also choose Manual yourself (it then starts from the
+   detected box). Drag the four sliders (left, top, right, bottom, in pixels)
+   until the green box in the live preview sits on the plot area, ideally on
+   gridlines or tick marks whose values you know, and enter those values as
+   the axis values in step 2.
+4. Pick the line to extract. The sidebar shows a swatch for each line colour
    found in the plot area; choose one, or "Auto" to use all coloured pixels
    (a black or gray line has no swatch and uses the dark fallback).
-4. Set the tolerance (what counts as "wrong", as % of the range) and the
+5. Set the tolerance (what counts as "wrong", as % of the range) and the
    forecast horizon `h`.
 
 The page shows the original chart next to the extracted line in red, how the
-plot area was found (`axes` or `grid`), the line colour used, the line mask
+plot area was found (`axes`, `grid` or `manual`), the line colour used, the line mask
 mode (`color` or `dark`), the chosen model, the overall P(wrong) with its 95%
 CI, a chart of the series with the forecast, and a table of P(wrong) with CI
 for each forecast step. A button downloads the extracted series as CSV.
@@ -331,6 +350,30 @@ For a chart with several lines, list the colours and pick one by number:
 python -m src.pipeline samples/robust/robust_13.png --list-colors
 python -m src.pipeline samples/robust/robust_13.png --color 2 --out out.csv
 ```
+
+If the plot area is not found (or is found wrong), give it by hand with
+`--box L T R B` in pixels. Detection is skipped; the box is only checked to be
+inside the image and not empty. The axis values then refer to the edges of
+your box.
+
+**Example: `real_01` with a manual box.** Automatic detection fails on this
+DAX chart (no axes; the fill hides the gridlines). Measured from the image,
+the y labels 25,200 and 24,800 are centred at rows 40 and 241, and the
+gridlines for 11:00 and 20:00 are at x = 212 and 810 (66.4 px per hour, so
+9:00 is at x = 80). With that box and those values:
+
+```
+python -m src.pipeline samples/real/real_01.png --box 80 40 810 241 --xmin 9 --xmax 20 --ymin 24800 --ymax 25200 --out dax.csv
+```
+
+the extracted line follows the chart closely (overlay:
+`docs/overlays/real/real_01_overlay.png`): about 24,980 at 9:06, a high of
+25,157 at about 15:38, and about 25,087 at the last point, which match what the
+chart shows. The x-values are hours as decimals (14.5 = 14:30). The dotted line
+near the bottom is the previous close (24,806.97), not 24,800, so it should
+not be used as the bottom edge. One pixel on this chart is about 2 index
+points on y and about 1 minute on x, so a box that is off by a few pixels
+shifts every value by that much.
 
 Other commands:
 

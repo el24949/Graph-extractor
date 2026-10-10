@@ -27,16 +27,18 @@ from src.risk import forecast_with_risk  # noqa: E402
 N_RESAMPLE = 100
 
 
-def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None):
+def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None, box=None):
     """Run extraction, overlay, resampling and forecast_with_risk on one image.
+
+    box: a manual (left, top, right, bottom) plot box, or None to detect it.
 
     Returns a dict of everything the page shows. Raises ValueError with a
     readable message for the failures the page reports.
     """
     # Pixel run for the overlay, calibrated run for the data. src/ is left
     # unchanged, so this calls the pipeline twice rather than re-mapping.
-    px_df, mode, box, box_mode = extract_series(img_path, target_hue=target_hue)
-    df, *_ = extract_series(img_path, x_ref, y_ref, target_hue=target_hue)
+    px_df, mode, box, box_mode = extract_series(img_path, target_hue=target_hue, box=box)
+    df, *_ = extract_series(img_path, x_ref, y_ref, target_hue=target_hue, box=box)
 
     img = cv2.imread(str(img_path))
     overlay = draw_overlay(img, px_df["px_x"], px_df["px_y"], thickness=2)
@@ -65,6 +67,20 @@ def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None):
         "risk": risk,
         "fallbacks": fallbacks,
     }
+
+
+def default_manual_box(width, height):
+    """A starting box for manual mode: the middle 80% of the image."""
+    return (round(0.1 * width), round(0.1 * height), round(0.9 * width) - 1, round(0.9 * height) - 1)
+
+
+def box_preview(img_bgr, box):
+    """RGB copy of the image with the box drawn in green, for the live preview."""
+    preview = img_bgr.copy()
+    left, top, right, bottom = box
+    thickness = max(1, round(min(img_bgr.shape[:2]) / 300))
+    cv2.rectangle(preview, (left, top), (right, bottom), (0, 180, 0), thickness)
+    return cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
 
 
 def swatch_html(hex_color, label):
@@ -140,9 +156,56 @@ def main():
     try:
         tmp.write(uploaded.getvalue())
         tmp.close()
+        img = cv2.imread(tmp.name)
+        if img is None:
+            raise FileNotFoundError(tmp.name)
+        height, width = img.shape[:2]
+
+        # Try automatic plot-area detection first.
+        auto_box, auto_error, colors = None, None, []
+        try:
+            auto_box, _, colors = series_colors(tmp.name)
+        except ValueError as exc:
+            auto_error = str(exc)
+
+        # Plot box: Auto, or Manual with sliders. If detection failed, Manual
+        # is selected for a new upload and starts from the middle 80% of the image.
+        upload_key = f"{uploaded.name}-{uploaded.size}"
+        with st.sidebar:
+            box_choice = st.radio(
+                "Plot box",
+                ["Auto", "Manual"],
+                index=1 if auto_error else 0,
+                horizontal=True,
+                key=f"box_choice-{upload_key}",
+            )
+            manual_box = None
+            if box_choice == "Manual":
+                start = auto_box or default_manual_box(width, height)
+                st.caption(f"Plot box in pixels (image is {width} x {height})")
+                manual_box = (
+                    st.slider("left", 0, width - 1, start[0], key=f"left-{upload_key}"),
+                    st.slider("top", 0, height - 1, start[1], key=f"top-{upload_key}"),
+                    st.slider("right", 0, width - 1, start[2], key=f"right-{upload_key}"),
+                    st.slider("bottom", 0, height - 1, start[3], key=f"bottom-{upload_key}"),
+                )
+
+        if auto_error:
+            st.error(f"Automatic plot-area detection failed: {auto_error}")
+            if box_choice == "Auto":
+                st.info("Switch Plot box to Manual in the sidebar to set the plot area by hand.")
+                return
+            st.info(
+                "Manual mode is on. Drag the sliders until the green box sits on the plot area, "
+                "then enter the axis values at its edges."
+            )
+        if manual_box is not None:
+            st.subheader("Plot box preview")
+            st.image(box_preview(img, manual_box), caption=f"Manual box {manual_box}", width="stretch")
+            # Colours inside the manual box (also validates it).
+            _, _, colors = series_colors(tmp.name, box=manual_box)
 
         # Line colours found in the plot area; the user picks which series to extract.
-        _, _, colors = series_colors(tmp.name)
         with st.sidebar:
             st.caption("Line colours found in the plot area")
             if colors:
@@ -160,13 +223,15 @@ def main():
         target_hue = colors[choice - 1]["hue"] if choice else None
         chosen = colors[choice - 1]["hex"] if choice else "auto"
 
-        result = analyze(tmp.name, (xmin, xmax), (ymin, ymax), tol_pct, h, target_hue=target_hue)
+        result = analyze(tmp.name, (xmin, xmax), (ymin, ymax), tol_pct, h, target_hue=target_hue, box=manual_box)
     except FileNotFoundError:
         st.error("Could not read the image. Is it a valid PNG or JPG?")
         return
     except ValueError as exc:
         msg = str(exc)
-        if "No plot area found" in msg or "Invalid plot area" in msg:
+        if "Invalid manual box" in msg:
+            st.error(f"{msg}. Adjust the sliders in the sidebar.")
+        elif "No plot area found" in msg or "Invalid plot area" in msg:
             st.error(f"No plot area found: no usable axis lines or gridlines. Details: {msg}")
         elif "chosen colour" in msg:
             st.error("No line of the chosen colour inside the plot area. Pick another colour or Auto.")
