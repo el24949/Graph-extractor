@@ -1,161 +1,94 @@
-# Graph Extractor
+# Time Series Graph Extraction & Forecast Risk Tool
 
-A tool for extracting time series data from images of graphs.
+Upload an image of a line chart. The tool extracts the plotted data with
+computer vision, forecasts the next points, and estimates **how likely each
+forecasted point is to be wrong**, using rolling forecast validation on the
+extracted history.
 
-## Problem
+> Status: extraction, calibration, forecasting, rolling validation, risk
+> estimation and the Streamlit UI are implemented. Demo video: [in progress].
 
-<!-- TODO -->
+## 1. Problem
 
-## Pipeline
+A chart image contains data, but not in a usable form. We want to
+(1) recover the numbers from the pixels, (2) forecast forward, and
+(3) say how much to trust that forecast, with a number instead of a guess.
 
-### Step 2: Synthetic charts with ground truth
+## 2. Approach (how I thought about it)
 
-`src/generate_samples.py` draws 15 line charts (trend, seasonal, random walk,
-trend + seasonal) with different colours, line widths, grids and image sizes.
-For each `samples/chart_XX.png` it also saves the exact data that was plotted
-(`chart_XX_truth.csv`) and the axis limits and plot-area box
-(`chart_XX_meta.json`). Seeds are fixed, so every run produces the same
-charts. Having the true data lets us measure how accurate each step is.
+The problem splits into three stages, and each one can fail independently,
+so I built and measured them separately:
 
-The extraction code never reads the meta files. Only the tests use them, to
-check the results.
+1. **Image -> data.** Classical CV (no deep learning): find the axes, isolate
+   the line, convert pixels to values. Classical methods are transparent,
+   fast, and easy to debug.
+2. **Data -> forecast.** Three simple models (naive, ETS, ARIMA) behind one
+   interface. The point is the validation, not model sophistication.
+3. **Forecast -> risk.** Instead of assuming a model is good, I test it on
+   the past: pretend we are at time *t*, forecast, compare with what really
+   happened, and repeat. The share of past forecasts that missed by more than
+   a tolerance is the estimated probability of being wrong.
 
-### Step 3A: Find the plot area
+**Ground truth first.** I generate synthetic charts from known data, so every
+stage can be scored against the true answer. Extraction code never reads the
+answer key (`*_meta.json`); only the evaluation script does.
 
-`detect_plot_area` in `src/extract.py` looks for the axis lines. It keeps only
-dark pixels, then uses morphological opening with long, thin kernels so that
-only long straight lines survive. Text, ticks and the data line are too short
-and disappear. The x axis gives the bottom and right edges; the y axis gives
-the left and top edges.
-
-### Step 3B: Isolate the line
-
-`extract_line_pixels` looks just inside the plot area (3 px in, to stay clear
-of the axes). It picks out coloured pixels using HSV saturation, which skips
-the white background, grey grid and black axes. For each pixel column it takes
-the middle (median) of the line's pixels, and fills empty columns by
-interpolation.
-
-Black or grey lines have no colour, so if fewer than 100 coloured pixels are
-found it switches to dark pixels instead (grayscale below 80). It reports which
-mode it used: `"color"` or `"dark"`.
-
-### Step 3C: Convert pixels to values
-
-`calibrate` in `src/calibrate.py` maps pixels to data values with a straight
-line through two reference points per axis: left edge to `xmin`, right edge to
-`xmax`, bottom edge to `ymin`, top edge to `ymax`. Pixel rows count downward
-but values go up, so the y mapping is flipped. Using bottom to `ymin` and top
-to `ymax` as the references handles this automatically.
-
-For now the axis limits come from the meta files. Reading them from the tick
-labels is a later step.
-
-### Step 4: Full pipeline and evaluation
-
-`extract_series` in `src/pipeline.py` runs Steps 3A to 3C on one image. Give it
-the axis limits to get data values, or leave them out to get pixel positions.
-It also returns the mode (`color` or `dark`) and the detected box. It never
-reads the meta files. The same thing is available from the command line:
+## 3. Pipeline
 
 ```
-python -m src.pipeline chart.png --xmin 0 --xmax 99 --ymin 40 --ymax 60 --out out.csv
+image -> detect plot area -> isolate line -> pixels -> calibrate -> series
+      -> resample (100 pts) -> rolling validation -> P(wrong) + CI -> forecast
 ```
 
-`src/evaluate.py` runs the pipeline on every sample chart and compares the
-result with the true data (see Results). It is the only code that reads the
-meta files, and only to get the axis limits. `src/overlay.py` draws the
-extracted line in red on top of each chart so you can check it by eye; the
-images are in `docs/overlays/`.
+### 3.1 Plot-area detection (`src/extract.py`)
+Grayscale -> threshold dark pixels -> morphological opening with long thin
+horizontal/vertical kernels. Text and the data line are too short to survive;
+the axes survive. Their extent gives the plot box.
 
-### Step 5: Forecasting
+### 3.2 Line isolation (`src/extract.py`)
+Crop inside the box (3 px inset to drop the axis lines). Keep **colored**
+pixels via HSV saturation (grid and axes are gray). **Fallback:** if there are
+too few colored pixels (black/gray lines), use dark pixels (grayscale < 80).
+For each x column take the median y of mask pixels; interpolate empty columns.
 
-`src/forecast.py` has three simple models. Each one takes the training values
-and a horizon `h` and returns `h` predictions:
+### 3.3 Calibration (`src/calibrate.py`)
+Linear map from pixels to values using two reference points per axis:
 
-- **naive**: repeats the last value. The baseline the others must beat.
-- **ets**: Holt's exponential smoothing with an additive trend and no
-  seasonality.
-- **arima**: ARIMA(1,1,1).
+```
+value = v1 + (p - p1) * (v2 - v1) / (p2 - p1)
+```
 
-If a statsmodels model fails to fit, gives a convergence warning or returns
-NaN, it falls back to the naive forecast and prints a warning, so one bad fit
-does not stop a run.
+The image y-axis is flipped; passing (bottom, ymin) and (top, ymax) makes
+`p2 - p1` negative, so no special case is needed.
 
-**Why resample first.** The extracted series has one point per pixel column,
-so its length depends on the image width (430 to 1,110 points on the samples), and
-many of those points are just interpolated between neighbours.
-`resample_series` puts every chart onto the same number of evenly spaced
-points (100 by default). The models assume equal steps, and a fixed length
-makes results comparable across charts.
+### 3.4 Forecasting (`src/forecast.py`)
+The extracted series has one point per pixel column (hundreds), so it is
+**resampled to 100 evenly spaced points**, which the models assume.
+Models: **naive** (last value), **ETS** (Holt, additive trend, no seasonality),
+**ARIMA(1,1,1)**. No seasonality, since the period is unknown from an image.
+If a statsmodels fit fails or returns NaN, it falls back to naive and warns.
 
-### Step 6: Rolling validation
+### 3.5 Rolling validation (`src/validate.py`)
+Expanding window: for each cut point *t* (from `min_train=30`, every
+`step=2`), fit on `y[:t]`, forecast `h=10` points, compare with the real
+`y[t:t+h]`. Error = `|pred - actual| / training_range * 100`, so it is a
+percentage of the chart's scale and comparable across charts. The full error
+matrix `(windows, h)` is kept, not just the mean.
 
-`src/validate.py` tests each model the way it would be used: forecasting a
-future it has not seen.
+### 3.6 Probability of being wrong (`src/risk.py`)
+- A forecasted point is **wrong** if its error exceeds a user-set tolerance
+  (default 10% of the range).
+- **P(wrong)** = fraction of validation errors above the tolerance, computed
+  **per forecast step**, because 1 step ahead is much easier than 10.
+- **95% confidence interval** by bootstrap over windows (2000 resamples,
+  fixed seed).
+- The model with the lowest rolling error is chosen per chart.
 
-- **Expanding window.** At each cut point the model trains on everything
-  before it and forecasts the next `h = 10` points. The first cut is after
-  `min_train = 30` points, then it moves forward `step = 2` points at a time,
-  so the training window keeps growing.
-- **Error as a % of the training range.** Each absolute error is divided by
-  the range (max - min) of that window's training data. This puts charts with
-  different scales on the same footing.
-- **Results per step ahead.** `summarize` reports the mean error, the error at
-  each of the 10 steps ahead, and the 90th percentile.
+## 4. Results
 
-**Windows overlap, so they are not independent.** With `step = 2` and
-`h = 10`, neighbouring windows share most of their forecast points and almost
-all of their training data. The number of windows overstates how much
-evidence there is, so small differences between models should not be read as
-meaningful.
-
-### Step 7: Forecast risk, P(wrong)
-
-`src/risk.py` attaches a chance of being wrong to each forecast point.
-
-- **What "wrong" means.** A forecast point is wrong if its error is more than
-  a chosen tolerance, `tol_pct` (default 10% of the training range, the same
-  scale as Step 6).
-- **P(wrong) per step ahead.** From the rolling validation errors, P(wrong)
-  is the share of windows where that step was wrong. It is computed separately
-  for each of the 10 steps ahead, since forecasts further out miss more often.
-- **Bootstrap over windows.** The 95% confidence interval comes from
-  resampling whole windows (rows of the error table) 2,000 times with a fixed
-  seed, so the result is reproducible.
-- **Model selection.** `forecast_with_risk` runs all three models, picks the
-  one with the lowest mean rolling error, forecasts the next 10 points with
-  it, and reports P(wrong) with its interval for each point.
-
-Limitations:
-
-- **The interval is too narrow.** Windows overlap (Step 6), so they are not
-  independent, and the bootstrap treats them as if they were.
-- **The model is chosen on the same errors used to score it.** The winner's
-  P(wrong) is likely a bit better than it will be on new data.
-- **It assumes the future behaves like the past.** If the series changes
-  behaviour after the end of the chart, the numbers no longer apply.
-- **It is an estimate, not an exact probability.** P(wrong) is a share of past
-  windows. When no window was wrong at some step, P(wrong) and its interval
-  are both 0, which only means no misses were seen, not that none can happen.
-
-## Install
-
-<!-- TODO -->
-
-## Usage
-
-<!-- TODO -->
-
-## Results
-
-**These results are on the 15 synthetic charts in `samples/`, not on real
-charts.** The synthetic charts are clean, with one line and no frame, legend
-or labels inside the plot. The axis limits are taken from the meta files, not
-read from the image. Expect real charts to do worse.
-
-Errors are a percentage of the y-axis range. Regenerate with
-`python -m src.evaluate`, which saves `docs/extraction_results.md`.
+### 4.1 Extraction accuracy (synthetic charts, 15 samples)
+Errors relative to the y-range. Axis limits come from the meta files, **not**
+from reading tick labels.
 
 | chart | mode | RMSE% | MAE% |
 |---|---|---:|---:|
@@ -177,25 +110,126 @@ Errors are a percentage of the y-axis range. Regenerate with
 | **mean** | | **1.74** | **1.34** |
 | **max** | | **4.87** | **3.70** |
 
-The worst case, `chart_01`, with the extracted line in red over the original
-(blue). Most of the line matches; the sharpest spikes show blue tips where the
-extraction cuts them short.
+Mean RMSE 1.74%, max 4.87% (chart_01, sharp spikes are flattened by the
+per-column median). Overlay example: `docs/overlays/chart_01_overlay.png`.
 
-![Extracted line over chart_01](docs/overlays/chart_01_overlay.png)
+**These results are on clean synthetic charts. Real images will be worse.**
 
-## Limitations
+### 4.2 Rolling validation example (chart_04, trend + seasonal)
+Mean error %: naive 16.8, ETS 25.7, ARIMA 18.6. ETS/ARIMA win for the first
+3-4 steps, then lose to naive because the chart has a seasonal wave neither
+model captures. One chart with overlapping windows is an example, not a
+model ranking.
 
-- **Easier than real charts.** The sample charts hide their top and right
-  borders, and there is nothing else inside the plot area. Real charts often
-  have a full frame, legends, labels and several lines, so finding the plot
-  area there is harder.
-- **The dark fallback picks up anything dark.** Dark text, markers or a legend
-  inside the plot area get mixed in with the line and pull the result off.
-- **Black or grey lines rely on the fallback.** They only work through the
-  dark-pixel mode. Mid-grey lines (lighter than grayscale 80) match neither
-  mode and fail.
-- **Sharp spikes get flattened.** Taking one value per pixel column cuts the
-  tips off narrow peaks, and the first and last few pixels next to the axes
-  are not measured. Noisy charts with steep jumps have the largest error.
-- **One line per chart.** With several lines, the column median falls between
-  them.
+### 4.3 Risk output
+chart_04, tolerance 10% of the range. Chosen model: **naive**. Overall P(wrong) 0.61, 95% CI [0.53, 0.68].
+
+| step | P(wrong) | 95% CI |
+|---:|---:|---|
+| 1 | 0.00 | [0.00, 0.00] |
+| 2 | 0.39 | [0.23, 0.58] |
+| 3 | 0.45 | [0.29, 0.65] |
+| 4 | 0.71 | [0.55, 0.87] |
+| 5 | 0.71 | [0.55, 0.87] |
+| 6 | 0.77 | [0.61, 0.90] |
+| 7 | 0.74 | [0.58, 0.90] |
+| 8 | 0.77 | [0.61, 0.90] |
+| 9 | 0.71 | [0.55, 0.87] |
+| 10 | 0.81 | [0.65, 0.94] |
+
+At step 1 the interval is [0, 0] because no misses were seen in 31 windows. That does not mean zero risk.
+
+Risk climbs from 0% at step 1 to about 80% at step 10 for this chart.
+
+## 5. Assumptions and limitations
+
+- **Axis values are supplied, not read.** OCR of tick labels is not
+  implemented; the user (or tests) provides two reference values per axis.
+- Single line, line chart, mostly white background, numeric x-axis.
+- Test charts hide the top/right border, so plot-area detection is easier
+  than on real charts with a full box.
+- Black/gray lines depend on the dark-pixel fallback; dark text or markers
+  inside the plot area can confuse it.
+- Per-column median flattens sharp spikes.
+- ARIMA(1,1,1) has no drift; on long horizons it may flatten.
+- No seasonality modeling.
+- **Rolling windows overlap** (`step=2 < h=10`), so they are not independent
+  and the confidence interval is optimistic.
+- The best model is selected on the same errors used to estimate P(wrong),
+  which makes the estimate slightly optimistic.
+- P(wrong) is an **empirical estimate**, not an exact probability. It
+  assumes the future behaves like the past.
+
+## 6. Install and usage
+
+### Install
+
+Requires Python 3.13 (what the project was built and tested on).
+
+```
+python -m venv .venv
+.venv\Scripts\activate          # Windows (cmd); PowerShell: .venv\Scripts\Activate.ps1
+source .venv/bin/activate       # macOS / Linux
+pip install -r requirements.txt
+```
+
+Tick-label reading (OCR) is not implemented, so no OCR library is installed.
+Axis values are entered by hand.
+
+### Web app
+
+```
+streamlit run app.py
+```
+
+Then open the URL it prints (usually http://localhost:8501).
+
+1. Upload a line chart (PNG or JPG) in the sidebar.
+2. Enter the axis values at the edges of the plot area: `xmin`, `xmax`,
+   `ymin`, `ymax`. These are not read from the image.
+3. Set the tolerance (what counts as "wrong", as % of the range) and the
+   forecast horizon `h`.
+
+The page shows the original chart next to the extracted line in red, the mask
+mode (`color` or `dark`), the chosen model, the overall P(wrong) with its 95%
+CI, a chart of the series with the forecast, and a table of P(wrong) with CI
+for each forecast step. A button downloads the extracted series as CSV.
+Problems (no axes found, no line found, series too flat) are shown as error
+messages.
+
+To try it on a sample, upload `samples/chart_04.png` with x from `0` to `299`
+and y from `-33.77` to `62.76` (the values in `chart_04_meta.json`).
+
+### Command line
+
+Extract one chart to CSV:
+
+```
+python -m src.pipeline samples/chart_04.png --xmin 0 --xmax 299 --ymin -33.77 --ymax 62.76 --out out.csv
+```
+
+Leave out all four limits to get pixel coordinates instead.
+
+Other commands:
+
+- `python -m src.generate_samples`: regenerate the synthetic charts
+- `python -m src.evaluate`: extraction accuracy table, saved to `docs/extraction_results.md`
+- `python -m src.overlay`: overlay images, saved to `docs/overlays/`
+- `pytest`: run the tests
+
+## 7. Repository layout
+
+```
+app.py      Streamlit web app
+src/        extract, calibrate, pipeline, forecast, validate, risk, evaluate, overlay
+tests/      pytest suites
+samples/    synthetic charts + truth CSV + meta JSON
+docs/       results table, overlays
+```
+
+## 8. Development process
+
+Built with Claude Code as an assistant. I designed the pipeline and the
+validation approach, set the evaluation rules (extraction never reads the
+answer key; fallbacks must fail tests rather than hide bugs), reviewed the
+results, and documented the limitations.
