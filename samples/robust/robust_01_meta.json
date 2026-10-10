@@ -12,5 +12,6 @@
   "kind": "trend",
   "seed": 2000,
   "n": 100,
-  "variant": "frame"
+  "variant": "frame",
+  "line_color": "#1f77b4"
 }

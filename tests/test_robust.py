@@ -1,5 +1,6 @@
 """Plot-area detection on the harder synthetic variants in samples/robust/:
-a dark frame around the image, mid-gray axes, gridlines only, and a full box.
+a dark frame around the image, mid-gray axes, gridlines only, and a full box,
+plus the line-isolation variants (two lines, legend, line ending early).
 
 Same rule as tests/test_extract.py: every edge within 3 px of the meta box.
 """
@@ -17,7 +18,16 @@ CHARTS = sorted(ROBUST_DIR.glob("robust_[0-9][0-9].png"))
 TOLERANCE_PX = 3
 
 # The box comes from gridlines only when the chart has no axis lines.
-EXPECTED_MODE = {"frame": "axes", "gray_axes": "axes", "grid_only": "grid", "full_box": "axes"}
+EXPECTED_MODE = {
+    "frame": "axes",
+    "gray_axes": "axes",
+    "grid_only": "grid",
+    "full_box": "axes",
+    # Line-isolation variants (tests/test_series.py); their boxes are checked here too.
+    "two_lines": "axes",
+    "legend": "axes",
+    "ends_early": "axes",
+}
 
 
 def test_robust_samples_exist():

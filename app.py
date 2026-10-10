@@ -21,13 +21,13 @@ import streamlit as st  # noqa: E402
 
 from src.forecast import MODELS, resample_series  # noqa: E402
 from src.overlay import draw_overlay  # noqa: E402
-from src.pipeline import extract_series  # noqa: E402
+from src.pipeline import extract_series, series_colors  # noqa: E402
 from src.risk import forecast_with_risk  # noqa: E402
 
 N_RESAMPLE = 100
 
 
-def analyze(img_path, x_ref, y_ref, tol_pct, h):
+def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None):
     """Run extraction, overlay, resampling and forecast_with_risk on one image.
 
     Returns a dict of everything the page shows. Raises ValueError with a
@@ -35,8 +35,8 @@ def analyze(img_path, x_ref, y_ref, tol_pct, h):
     """
     # Pixel run for the overlay, calibrated run for the data. src/ is left
     # unchanged, so this calls the pipeline twice rather than re-mapping.
-    px_df, mode, box, box_mode = extract_series(img_path)
-    df, *_ = extract_series(img_path, x_ref, y_ref)
+    px_df, mode, box, box_mode = extract_series(img_path, target_hue=target_hue)
+    df, *_ = extract_series(img_path, x_ref, y_ref, target_hue=target_hue)
 
     img = cv2.imread(str(img_path))
     overlay = draw_overlay(img, px_df["px_x"], px_df["px_y"], thickness=2)
@@ -65,6 +65,14 @@ def analyze(img_path, x_ref, y_ref, tol_pct, h):
         "risk": risk,
         "fallbacks": fallbacks,
     }
+
+
+def swatch_html(hex_color, label):
+    """A small coloured square followed by a label, for st.markdown."""
+    return (
+        f'<span style="display:inline-block;width:14px;height:14px;background:{hex_color};'
+        f'border:1px solid #888;margin-right:6px;vertical-align:middle"></span>{label}'
+    )
 
 
 def forecast_figure(x, y, x_future, forecast, model):
@@ -132,7 +140,27 @@ def main():
     try:
         tmp.write(uploaded.getvalue())
         tmp.close()
-        result = analyze(tmp.name, (xmin, xmax), (ymin, ymax), tol_pct, h)
+
+        # Line colours found in the plot area; the user picks which series to extract.
+        _, _, colors = series_colors(tmp.name)
+        with st.sidebar:
+            st.caption("Line colours found in the plot area")
+            if colors:
+                st.markdown(
+                    "<br>".join(swatch_html(c["hex"], f"{i}: {c['hex']} ({c['count']} px)") for i, c in enumerate(colors, 1)),
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown("None (no coloured pixels; a black or gray line uses the dark fallback).")
+            choice = st.radio(
+                "Line to extract",
+                options=[0] + list(range(1, len(colors) + 1)),
+                format_func=lambda i: "Auto (all coloured pixels)" if i == 0 else f"Colour {i}: {colors[i - 1]['hex']}",
+            )
+        target_hue = colors[choice - 1]["hue"] if choice else None
+        chosen = colors[choice - 1]["hex"] if choice else "auto"
+
+        result = analyze(tmp.name, (xmin, xmax), (ymin, ymax), tol_pct, h, target_hue=target_hue)
     except FileNotFoundError:
         st.error("Could not read the image. Is it a valid PNG or JPG?")
         return
@@ -140,6 +168,8 @@ def main():
         msg = str(exc)
         if "No plot area found" in msg or "Invalid plot area" in msg:
             st.error(f"No plot area found: no usable axis lines or gridlines. Details: {msg}")
+        elif "chosen colour" in msg:
+            st.error("No line of the chosen colour inside the plot area. Pick another colour or Auto.")
         elif "line pixels" in msg:
             st.error("No line found inside the plot area (no coloured or dark pixels).")
         elif "too short" in msg or "No valid windows" in msg:
@@ -160,7 +190,8 @@ def main():
     col2.image(result["overlay_rgb"], caption="Extracted line (red)", width="stretch")
     left, top, right, bottom = result["box"]
     st.write(
-        f"Plot area from: **{result['box_mode']}**; line mask mode: **{result['mode']}**; "
+        f"Plot area from: **{result['box_mode']}**; line colour: **{chosen}**; "
+        f"line mask mode: **{result['mode']}**; "
         f"plot box (left, top, right, bottom): "
         f"({left}, {top}, {right}, {bottom}); {len(result['df'])} points extracted"
     )

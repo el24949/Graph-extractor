@@ -12,5 +12,6 @@
   "kind": "trend",
   "seed": 2008,
   "n": 300,
-  "variant": "grid_only"
+  "variant": "grid_only",
+  "line_color": "#1f77b4"
 }

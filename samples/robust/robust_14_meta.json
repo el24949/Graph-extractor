@@ -1,0 +1,17 @@
+{
+  "xmin": 0.0,
+  "xmax": 199.0,
+  "ymin": 38.2898378965288,
+  "ymax": 61.92790613852159,
+  "plot_bbox_px": {
+    "left": 33.77777777777778,
+    "right": 468.0,
+    "top": 12.0,
+    "bottom": 289.1111111111111
+  },
+  "kind": "seasonal",
+  "seed": 2013,
+  "n": 200,
+  "variant": "two_lines",
+  "line_color": "#d62728"
+}

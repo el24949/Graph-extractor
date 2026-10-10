@@ -12,5 +12,6 @@
   "kind": "trend",
   "seed": 2004,
   "n": 200,
-  "variant": "gray_axes"
+  "variant": "gray_axes",
+  "line_color": "#1f77b4"
 }

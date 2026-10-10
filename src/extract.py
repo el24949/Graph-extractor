@@ -205,22 +205,182 @@ def detect_plot_area(img_bgr):
     return find_plot_area(img_bgr)[0]
 
 
-def extract_line_pixels(img_bgr, box, inset=3, sat_threshold=60, min_color_pixels=100, dark_threshold=80):
-    """Return (px_x, px_y, mode): one line y-position per pixel column inside box.
+# --- Line isolation -------------------------------------------------------
 
-    Coordinates are in full-image pixels. Columns where no line pixel was
-    found are filled by linear interpolation from their neighbours.
+# Hues are in OpenCV units: 0-179, i.e. degrees / 2, and they wrap around.
+# Two colours within this many units (20 degrees) count as the same series.
+HUE_TOL = 10
+# Ignore very dark pixels when reading colour: their hue is mostly noise.
+MIN_VALUE = 50
+# Drop colour clusters smaller than this share of the saturated pixels.
+MIN_COLOR_FRAC = 0.01
+# k-means is fitted on at most this many pixels (evenly spaced, deterministic).
+MAX_KMEANS_PIXELS = 5000
 
-    mode is "color" when the line was found by saturation, or "dark" when
-    fewer than min_color_pixels coloured pixels were found and the mask was
-    built from dark pixels (grayscale < dark_threshold) instead.
-    """
+
+def _crop_inside(img_bgr, box, inset):
+    """Crop the plot area, stepping in `inset` px so axes and ticks are excluded.
+    Returns (crop, x0, y0) where (x0, y0) is the crop's top-left in the image."""
     left, top, right, bottom = box
-
-    # Crop inside the box, stepping in a few pixels so the axis lines and
-    # tick marks are excluded.
     x0, y0 = left + inset, top + inset
-    crop = img_bgr[y0 : bottom - inset, x0 : right - inset]
+    return img_bgr[y0 : bottom - inset, x0 : right - inset], x0, y0
+
+
+def _hue_distance(hue, target):
+    """Circular distance between hues in OpenCV units (red at 0 and 179 are close)."""
+    d = np.abs(np.asarray(hue, dtype=float) - target) % 180
+    return np.minimum(d, 180 - d)
+
+
+def _circular_mean_hue(hues, weights=None):
+    angles = np.asarray(hues, dtype=float) * (2 * np.pi / 180)
+    angle = np.arctan2(np.average(np.sin(angles), weights=weights), np.average(np.cos(angles), weights=weights))
+    return float((angle * 180 / (2 * np.pi)) % 180)
+
+
+def find_series_colors(img_bgr, box, k=4, inset=3, sat_threshold=60):
+    """Return the dominant line colours inside the plot area, largest first.
+
+    Runs k-means on the hue of saturated pixels, then merges clusters closer
+    than HUE_TOL (k is an upper bound; one coloured line gives one colour) and
+    drops tiny ones. Each entry is a dict with "hue" (OpenCV units, 0-179, to
+    pass as target_hue), "count" (pixels), "bgr" and "hex" (a typical colour
+    of the cluster, for showing a swatch). Returns [] if nothing is saturated,
+    e.g. a black line, which extract_line_pixels handles with its dark mode.
+    """
+    from sklearn.cluster import KMeans  # imported here: only needed for colour lists
+
+    crop, _, _ = _crop_inside(img_bgr, box, inset)
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    saturated = (hsv[:, :, 1] > sat_threshold) & (hsv[:, :, 2] > MIN_VALUE)
+    hues = hsv[:, :, 0][saturated].astype(float)
+    bgrs = crop[saturated]
+    if hues.size == 0:
+        return []
+
+    # Hue is an angle, so cluster points on the circle (cos, sin), not raw hue:
+    # otherwise reds at 2 and 178 would land in different clusters.
+    angles = hues * (2 * np.pi / 180)
+    points = np.column_stack([np.cos(angles), np.sin(angles)])
+    n_clusters = min(k, len(np.unique(hues)))
+    sample = points[:: max(1, len(points) // MAX_KMEANS_PIXELS)]
+    labels = KMeans(n_clusters=n_clusters, n_init=10, random_state=0).fit(sample).predict(points)
+
+    clusters = [(hues[labels == c], bgrs[labels == c]) for c in range(n_clusters)]
+    clusters = [(h, b) for h, b in clusters if h.size]
+    clusters.sort(key=lambda hb: -hb[0].size)
+
+    # Merge clusters of (nearly) the same hue: k-means splits one line into
+    # several clusters when there are fewer colours than k.
+    groups = []
+    for h, b in clusters:
+        hue = _circular_mean_hue(h)
+        for g in groups:
+            if _hue_distance(hue, g["hue"]) < HUE_TOL:
+                g["hues"].append(h)
+                g["bgrs"].append(b)
+                g["hue"] = _circular_mean_hue(np.concatenate(g["hues"]))
+                break
+        else:
+            groups.append({"hue": hue, "hues": [h], "bgrs": [b]})
+
+    colors = []
+    for g in groups:
+        count = int(sum(h.size for h in g["hues"]))
+        if count < MIN_COLOR_FRAC * hues.size:
+            continue
+        # The most saturated quarter of the pixels is the line's core colour;
+        # the rest is anti-aliasing blended with the background.
+        b = np.concatenate(g["bgrs"])
+        sat = cv2.cvtColor(b.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV)[:, 0, 1]
+        core = b[sat >= np.percentile(sat, 75)]
+        blue, green, red = (int(v) for v in np.median(core, axis=0))
+        colors.append(
+            {"hue": g["hue"], "count": count, "bgr": (blue, green, red), "hex": f"#{red:02x}{green:02x}{blue:02x}"}
+        )
+    colors.sort(key=lambda c: -c["count"])
+    return colors
+
+
+def _column_runs(mask):
+    """For each column, the vertical runs of mask pixels as (start_row, end_row)."""
+    runs = []
+    for col in range(mask.shape[1]):
+        rows = np.flatnonzero(mask[:, col])
+        if rows.size == 0:
+            runs.append([])
+            continue
+        breaks = np.flatnonzero(np.diff(rows) > 1)
+        starts = np.r_[rows[0], rows[breaks + 1]]
+        ends = np.r_[rows[breaks], rows[-1]]
+        runs.append(list(zip(starts.tolist(), ends.tolist())))
+    return runs
+
+
+def _closest_run(runs, y):
+    """The run nearest to row y (distance 0 if y lies inside the run)."""
+    return min(runs, key=lambda r: (max(r[0] - y, 0, y - r[1]), abs((r[0] + r[1]) / 2 - y)))
+
+
+def _track_line(mask):
+    """Follow one line through the mask, column by column.
+
+    Starts inside the largest connected component (the main line, not a legend
+    sample or stray marks), then walks right and left. In each column it picks
+    the vertical run closest to the previous column's y and takes the run's
+    median row. Returns an array of y per column, NaN where a column is empty.
+    """
+    n_rows, n_cols = mask.shape
+    ys = np.full(n_cols, np.nan)
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    if n_labels <= 1:
+        return ys
+    biggest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    in_biggest = labels == biggest
+
+    # Start in the middle column of the largest component, on its run there.
+    comp_cols = np.flatnonzero(in_biggest.any(axis=0))
+    start = int(comp_cols[len(comp_cols) // 2])
+    runs = _column_runs(mask)
+    start_run = max(runs[start], key=lambda r: in_biggest[r[0] : r[1] + 1, start].sum())
+    ys[start] = (start_run[0] + start_run[1]) / 2  # median of a contiguous run
+
+    for direction in (1, -1):
+        prev_y = ys[start]
+        col = start + direction
+        while 0 <= col < n_cols:
+            if runs[col]:
+                run = _closest_run(runs[col], prev_y)
+                ys[col] = prev_y = (run[0] + run[1]) / 2
+            col += direction
+    return ys
+
+
+def extract_line_pixels(
+    img_bgr,
+    box,
+    inset=3,
+    sat_threshold=60,
+    min_color_pixels=100,
+    dark_threshold=80,
+    target_hue=None,
+    hue_tol=HUE_TOL,
+):
+    """Return (px_x, px_y, mode): the line's y-position per pixel column.
+
+    Coordinates are in full-image pixels. Only the x-range where the line was
+    actually found is returned: gaps inside it are filled by linear
+    interpolation, but nothing is extrapolated past either end.
+
+    target_hue (OpenCV units, 0-179, e.g. from find_series_colors) keeps only
+    pixels of that colour, within hue_tol. Without it, all saturated pixels
+    are used, as before.
+
+    mode is "color" when the line was found by saturation, or "dark" when no
+    target_hue was given, fewer than min_color_pixels coloured pixels were
+    found, and the mask was built from dark pixels (grayscale < dark_threshold).
+    """
+    crop, x0, y0 = _crop_inside(img_bgr, box, inset)
 
     # The data line is coloured; the background, grid, axes and text are
     # white, grey or black, which all have low saturation.
@@ -228,30 +388,29 @@ def extract_line_pixels(img_bgr, box, inset=3, sat_threshold=60, min_color_pixel
     mask = hsv[:, :, 1] > sat_threshold
     mode = "color"
 
-    # A black or grey line has no saturation, so the colour mask comes back
-    # (nearly) empty. Fall back to dark pixels; the light grid stays excluded.
-    if mask.sum() < min_color_pixels:
+    if target_hue is not None:
+        # Keep only the chosen series' colour (dark pixels have unreliable hue).
+        mask &= (hsv[:, :, 2] > MIN_VALUE) & (_hue_distance(hsv[:, :, 0], target_hue) <= hue_tol)
+        if mask.sum() < min_color_pixels:
+            raise ValueError(f"No line pixels of the chosen colour (hue {target_hue:.0f}) inside the plot area")
+    elif mask.sum() < min_color_pixels:
+        # A black or grey line has no saturation, so the colour mask comes back
+        # (nearly) empty. Fall back to dark pixels; the light grid stays excluded.
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         mask = gray < dark_threshold
         mode = "dark"
 
-    # For each column, the median row of the line's pixels is its centre.
-    n_cols = crop.shape[1]
-    ys = np.full(n_cols, np.nan)
-    for col in range(n_cols):
-        rows = np.nonzero(mask[:, col])[0]
-        if rows.size:
-            ys[col] = np.median(rows)
+    # Follow one line instead of taking the median of everything in a column,
+    # so a second series, a legend sample or a logo does not pull it off.
+    ys = _track_line(mask)
 
-    found = ~np.isnan(ys)
-    if not found.any():
+    found = np.flatnonzero(~np.isnan(ys))
+    if found.size == 0:
         raise ValueError("No line pixels found inside the plot area (tried colour and dark masks)")
 
-    # Fill empty columns from the nearest found columns on either side.
-    cols = np.arange(n_cols)
-    ys[~found] = np.interp(cols[~found], cols[found], ys[found])
+    # Interpolate only between the first and last columns with data.
+    cols = np.arange(found[0], found[-1] + 1)
+    ys = np.interp(cols, found, ys[found])
 
     # Shift from crop coordinates back to full-image coordinates.
-    px_x = (cols + x0).astype(float)
-    px_y = ys + y0
-    return px_x, px_y, mode
+    return (cols + x0).astype(float), ys + y0, mode

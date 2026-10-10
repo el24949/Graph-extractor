@@ -12,5 +12,6 @@
   "kind": "trend_seasonal",
   "seed": 2011,
   "n": 300,
-  "variant": "full_box"
+  "variant": "full_box",
+  "line_color": "#000000"
 }

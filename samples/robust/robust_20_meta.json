@@ -1,0 +1,17 @@
+{
+  "xmin": 0.0,
+  "xmax": 248.75,
+  "ymin": -12.87795417900559,
+  "ymax": 59.60213395357244,
+  "plot_bbox_px": {
+    "left": 42.777777777777786,
+    "right": 467.99999999999994,
+    "top": 12.0,
+    "bottom": 289.1111111111111
+  },
+  "kind": "trend_seasonal",
+  "seed": 2019,
+  "n": 200,
+  "variant": "ends_early",
+  "line_color": "#1f77b4"
+}

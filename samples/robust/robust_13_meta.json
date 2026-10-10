@@ -1,0 +1,17 @@
+{
+  "xmin": 0.0,
+  "xmax": 99.0,
+  "ymin": 19.82194351715198,
+  "ymax": 53.51009392636646,
+  "plot_bbox_px": {
+    "left": 42.72222222222223,
+    "right": 785.0,
+    "top": 15.0,
+    "bottom": 361.3888888888889
+  },
+  "kind": "trend",
+  "seed": 2012,
+  "n": 100,
+  "variant": "two_lines",
+  "line_color": "#1f77b4"
+}

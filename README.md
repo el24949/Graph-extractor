@@ -74,7 +74,29 @@ gridlines with no axes, and a full box. All boxes are within 3 px.
 Crop inside the box (3 px inset to drop the axis lines). Keep **colored**
 pixels via HSV saturation (grid and axes are gray). **Fallback:** if there are
 too few colored pixels (black/gray lines), use dark pixels (grayscale < 80).
-For each x column take the median y of mask pixels; interpolate empty columns.
+
+- **Pick a series by colour.** `find_series_colors` runs k-means (k = 4) on the
+  hue of the saturated pixels inside the box, merges clusters of nearly the
+  same hue, and returns the line colours with their pixel counts. The user
+  picks one (swatches in the app, `--list-colors` / `--color N` on the command
+  line), and it is passed as `target_hue`: only pixels within 20 degrees of
+  that hue are kept. Without a choice ("Auto") all coloured pixels are used.
+- **Follow one line.** Each column's mask is split into vertical runs. Tracking
+  starts in the largest connected component (the main line, not a legend
+  sample), then walks left and right, taking in each column the run closest to
+  the previous column's y and the median row inside that run. A legend sample,
+  a logo or another series in the same column no longer pulls the value off.
+- **No extrapolation.** Empty columns are interpolated only between the first
+  and last columns where the line was found, and only that x-range is
+  returned. A line that ends early is no longer extended flat to the edge.
+
+Tested on 9 more synthetic charts in `samples/robust/`: two crossing lines of
+different colours, a legend sample of the line's colour inside the plot, and a
+line ending before the right edge. Each is extracted with the colour a user
+would pick and must be under 5% RMSE and end within 3 px of the data's end.
+8 of 9 pass; the ninth (`robust_21`, 5.89%) is a known failure from spike
+flattening on a very dense, noisy chart, marked as an expected failure in the
+tests. The 15 main charts give exactly the same results as before.
 
 ### 3.3 Calibration (`src/calibrate.py`)
 Linear map from pixels to values using two reference points per axis:
@@ -185,52 +207,59 @@ stopped with "Could not find both axis lines" (no axes, or gray axes). The
 other two returned an invalid box because a screenshot frame or black bar was
 taken as an axis.
 
-**After making plot-area detection robust** (section 3.1): 1 worked, 3 partly,
-1 still failed. Line isolation was not changed, and most of what is still
-wrong comes from it.
+**Then two fixes, measured after each:** robust plot-area detection (section
+3.1), then robust line isolation with a chosen line colour (section 3.2).
 
-| chart | before | after | what is still wrong |
-|---|---|---|---|
-| `real_01` | failed (error) | **failed (error)** | No axes, and the filled area under the line hides the gridlines |
-| `real_02` | failed (wrong output) | **partly** | Box correct; line drops onto the NOAA logo inside the plot |
-| `real_03` | failed (error) | **worked** | Box from gridlines; line traced (flat after the last point) |
-| `real_04` | failed (wrong output) | **partly** | Box correct; two lines, so the median jumps between them |
-| `real_05` | failed (error) | **partly** | Gray axes found; y axis cut off at the image top, so the box top is the image edge |
+| chart | first version | after detection fix | after line fix (now) | what is still wrong |
+|---|---|---|---|---|
+| `real_01` | failed (error) | failed (error) | **failed (error)** | No axes, and the filled area under the line hides the gridlines |
+| `real_02` | failed (wrong output) | partly | **worked** | Logo no longer picked up; red series extracted end to end |
+| `real_03` | failed (error) | worked | **worked** | No flat tail any more; dates must be entered as numbers |
+| `real_04` | failed (wrong output) | partly | **worked (with a colour chosen)** | Each line extracted by its colour; on Auto it still switches lines where they cross |
+| `real_05` | failed (error) | partly | **partly** | Line now right; y axis cut off at the image top, so the box top is the image edge |
 
-Details in `docs/real_results.md`; overlays in `docs/overlays/real/`.
+Now: 3 worked, 1 partly, 1 failed. Details, sources and the colour used per
+chart are in `docs/real_results.md`; overlays in `docs/overlays/real/`.
 
-![real_02: box now correct, the extracted line (red) follows the series but drops onto the NOAA logo](docs/overlays/real/real_02_overlay.png)
+![real_04 with the blue colour chosen: the extracted line (red) follows the blue series and ignores the orange one](docs/overlays/real/real_04_overlay.png)
 
 **This is still an honest limitation.** The pipeline was built and tested on
 synthetic charts. The 1-5% extraction errors in section 4 only hold for charts
-like those. On real charts, finding the plot area now works in 4 of 5 cases,
-but getting the right line out still needs work: multiple lines, logos and
-fills inside the plot break line isolation. It is not yet a tool for arbitrary
-real charts.
+like those. Five real screenshots are a small sample: they show the main
+failure modes are now handled when the user picks the line colour, but they do
+not show it works on arbitrary real charts. `real_01` (no axes, filled area)
+still fails, and charts with several lines need a colour to be chosen.
 
 ## 6. Assumptions and limitations
 
 - **Axis values are supplied, not read.** OCR of tick labels is not
   implemented; the user (or tests) provides two reference values per axis.
-- Single line, line chart, mostly white background, numeric x-axis.
+- One line is extracted at a time; line chart, mostly white background, numeric x-axis.
 - **Real charts mostly do not work end to end yet.** Of five real screenshots
   (section 5), 1 worked, 3 partly, 1 failed.
-- **Line isolation is the weak point on real charts.** It assumes one coloured
-  line and nothing else coloured in the plot; several lines, logos and filled
-  areas break it.
+- **Several lines need a colour to be chosen.** On Auto, the tracker can switch
+  to another series where two lines cross. Lines of very similar colours
+  (within about 20 degrees of hue) cannot be separated.
+- **Same-coloured objects in the plot can still interfere.** Tracking follows
+  the run closest to the previous column, so a marker, label or logo of the
+  chosen colour lying right on the line can pull it off for a few columns.
+  Hollow markers give small hooks.
 - **Filled areas can hide gridlines.** When a chart has no axes and a fill
   under the line, the gridline fallback can fail.
 - **Light backgrounds only.** Thresholds are relative to the background and
   assume dark lines on a light background; dark-mode charts are not handled.
 - **The box ends where the lines end.** If an axis is cut off at the image edge,
   that edge becomes the box edge, which is not a labelled value.
-- **The line is extended flat** from its last found point to the box edge when
-  the data stops before the edge.
+- **Hidden stretches are interpolated.** Where another series is drawn over the
+  chosen one, its pixels are missing and those columns are filled in by a
+  straight line. Nothing is extrapolated past the ends.
 - The 15 main test charts hide the top/right border; full boxes, frames, gray
   axes and gridline-only charts are tested separately in `samples/robust/`.
-- Black/gray lines depend on the dark-pixel fallback; dark text or markers
-  inside the plot area can confuse it.
-- Per-column median flattens sharp spikes.
+- Black/gray lines depend on the dark-pixel fallback (they have no colour to
+  choose); dark text or markers inside the plot area can confuse it.
+- **One value per column flattens sharp spikes.** The middle of a vertical run
+  cuts the tip off a narrow peak. On very dense, noisy charts this pushes the
+  error over 5% (`robust_21`: 5.89%).
 - ARIMA(1,1,1) has no drift; on long horizons it may flatten.
 - No seasonality modeling.
 - **Rolling windows overlap** (`step=2 < h=10`), so they are not independent.
@@ -269,11 +298,15 @@ Then open the URL it prints (usually http://localhost:8501).
 1. Upload a line chart (PNG or JPG) in the sidebar.
 2. Enter the axis values at the edges of the plot area: `xmin`, `xmax`,
    `ymin`, `ymax`. These are not read from the image.
-3. Set the tolerance (what counts as "wrong", as % of the range) and the
+3. Pick the line to extract. The sidebar shows a swatch for each line colour
+   found in the plot area; choose one, or "Auto" to use all coloured pixels
+   (a black or gray line has no swatch and uses the dark fallback).
+4. Set the tolerance (what counts as "wrong", as % of the range) and the
    forecast horizon `h`.
 
-The page shows the original chart next to the extracted line in red, how the plot
-area was found (`axes` or `grid`), the line mask mode (`color` or `dark`), the chosen model, the overall P(wrong) with its 95%
+The page shows the original chart next to the extracted line in red, how the
+plot area was found (`axes` or `grid`), the line colour used, the line mask
+mode (`color` or `dark`), the chosen model, the overall P(wrong) with its 95%
 CI, a chart of the series with the forecast, and a table of P(wrong) with CI
 for each forecast step. A button downloads the extracted series as CSV.
 Problems (no axes found, no line found, series too flat) are shown as error
@@ -291,6 +324,13 @@ python -m src.pipeline samples/chart_04.png --xmin 0 --xmax 299 --ymin -33.77 --
 ```
 
 Leave out all four limits to get pixel coordinates instead.
+
+For a chart with several lines, list the colours and pick one by number:
+
+```
+python -m src.pipeline samples/robust/robust_13.png --list-colors
+python -m src.pipeline samples/robust/robust_13.png --color 2 --out out.csv
+```
 
 Other commands:
 

@@ -1,0 +1,17 @@
+{
+  "xmin": 0.0,
+  "xmax": 299.0,
+  "ymin": 47.47773068498422,
+  "ymax": 97.80321090702914,
+  "plot_bbox_px": {
+    "left": 51.66666666666665,
+    "right": 1182.0,
+    "top": 18.0,
+    "bottom": 553.6666666666667
+  },
+  "kind": "random_walk",
+  "seed": 2014,
+  "n": 300,
+  "variant": "two_lines",
+  "line_color": "#2ca02c"
+}

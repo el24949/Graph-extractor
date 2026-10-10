@@ -12,5 +12,6 @@
   "kind": "seasonal",
   "seed": 2009,
   "n": 100,
-  "variant": "full_box"
+  "variant": "full_box",
+  "line_color": "#d62728"
 }

@@ -12,5 +12,6 @@
   "kind": "trend_seasonal",
   "seed": 2003,
   "n": 100,
-  "variant": "gray_axes"
+  "variant": "gray_axes",
+  "line_color": "#000000"
 }

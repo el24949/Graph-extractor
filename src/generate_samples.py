@@ -8,9 +8,11 @@ Run from the project root:
     python -m src.generate_samples            # the 15 clean charts in samples/
     python -m src.generate_samples --robust   # harder variants in samples/robust/
 
-The robust variants test plot-area detection on things the clean charts do not
-have: a dark frame around the image, mid-gray axes, gridlines with no axes,
-and a full box (top and right borders drawn).
+The robust variants test things the clean charts do not have. For plot-area
+detection: a dark frame around the image, mid-gray axes, gridlines with no
+axes, and a full box (top and right borders drawn). For line isolation: a
+second line in another colour, a legend sample of the line's colour inside the
+plot, and a line that ends before the right edge.
 """
 
 import argparse
@@ -78,6 +80,9 @@ def render_chart(
     gridlines_only=False,
     frame_px=0,
     frame_color=(0.12, 0.12, 0.12),
+    extra_series=None,
+    legend=False,
+    x_pad_frac=0.0,
 ):
     """Draw y against x as a single clean line chart and save it to path.
 
@@ -87,17 +92,30 @@ def render_chart(
       gridlines_only: no axis lines at all, only gridlines, with gridlines on
         the axis limits so they outline the plot area.
       frame_px: add a solid frame this many pixels wide around the whole image.
+      extra_series: list of (x, y, color) lines drawn after the main one.
+      legend: add a legend (placed by matplotlib inside the plot, away from the
+        data) whose sample line has the main line's colour.
+      x_pad_frac: extend the x-axis past the last x by this fraction of the
+        data range, so the line ends before the right edge.
 
     Returns a dict with the axis limits and the plot-area bounding box in
     image pixel coordinates (origin top-left, y pointing down).
     """
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi, facecolor="white")
     ax.set_facecolor("white")
-    ax.plot(x, y, color=color, linewidth=linewidth)
+    ax.plot(x, y, color=color, linewidth=linewidth, label="series")
+    all_y = [y]
+    for x2, y2, color2 in extra_series or []:
+        ax.plot(x2, y2, color=color2, linewidth=linewidth, label="other")
+        all_y.append(y2)
+    if legend:
+        ax.legend(loc="best")
 
-    margin = 0.05 * (y.max() - y.min())
-    ax.set_xlim(x.min(), x.max())
-    ax.set_ylim(y.min() - margin, y.max() + margin)
+    y_lo = min(v.min() for v in all_y)
+    y_hi = max(v.max() for v in all_y)
+    margin = 0.05 * (y_hi - y_lo)
+    ax.set_xlim(x.min(), x.max() + x_pad_frac * (x.max() - x.min()))
+    ax.set_ylim(y_lo - margin, y_hi + margin)
     if gridlines_only:
         # Ticks exactly on the limits, so the outermost gridlines are the plot edges.
         ax.set_xticks(np.linspace(*ax.get_xlim(), 6))
@@ -204,7 +222,13 @@ ROBUST_VARIANTS = {
     "gray_axes": {"axes_color": "#8c8c8c"},  # gray 140
     "grid_only": {"gridlines_only": True},
     "full_box": {"full_box": True},
+    # Line isolation variants. The main line is always the one in the truth CSV.
+    "two_lines": {"second_line": True},
+    "legend": {"legend": True},
+    "ends_early": {"x_pad_frac": 0.25},
 }
+# Colour of the second line in "two_lines", far in hue from every main colour.
+SECOND_LINE_COLOR = "#ff7f0e"
 
 
 def main_robust(per_variant=3):
@@ -227,19 +251,29 @@ def main_robust(per_variant=3):
 
             name = f"robust_{i + 1:02d}"
             grid = k % 2 == 0
+            color = colors[i % len(colors)]
+            chart_options = dict(options)
+            if chart_options.pop("second_line", False):
+                # A different kind of series over the same x-range, so the two
+                # lines cross. Only the main line is in the truth CSV.
+                y2 = make_series(n, seed + 500, KINDS[(i + 1) % len(KINDS)])
+                y2 = y2 - y2.mean() + y.mean()
+                chart_options["extra_series"] = [(x, y2, SECOND_LINE_COLOR)]
+            if variant in ("two_lines", "legend", "ends_early") and color == "#000000":
+                color = "#1f77b4"  # these variants are about colour; keep the line coloured
             meta = render_chart(
                 x,
                 y,
                 ROBUST_DIR / f"{name}.png",
-                color=colors[i % len(colors)],
+                color=color,
                 linewidth=1.5,
                 grid=grid,
                 figsize=figsizes[k % len(figsizes)],
                 dpi=dpis[k % len(dpis)],
-                **options,
+                **chart_options,
             )
             pd.DataFrame({"x": x, "y": y}).to_csv(ROBUST_DIR / f"{name}_truth.csv", index=False)
-            meta.update({"kind": kind, "seed": seed, "n": n, "variant": variant})
+            meta.update({"kind": kind, "seed": seed, "n": n, "variant": variant, "line_color": color})
             with open(ROBUST_DIR / f"{name}_meta.json", "w") as f:
                 json.dump(meta, f, indent=2)
             print(f"{name}: variant={variant}, kind={kind}, n={n}")

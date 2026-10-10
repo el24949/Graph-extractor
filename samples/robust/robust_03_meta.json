@@ -12,5 +12,6 @@
   "kind": "random_walk",
   "seed": 2002,
   "n": 300,
-  "variant": "frame"
+  "variant": "frame",
+  "line_color": "#2ca02c"
 }

@@ -12,5 +12,6 @@
   "kind": "seasonal",
   "seed": 2005,
   "n": 300,
-  "variant": "gray_axes"
+  "variant": "gray_axes",
+  "line_color": "#d62728"
 }
