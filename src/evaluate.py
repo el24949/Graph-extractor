@@ -28,7 +28,7 @@ def evaluate_chart(img_path):
     meta = json.loads(img_path.with_name(f"{img_path.stem}_meta.json").read_text())
     truth = pd.read_csv(img_path.with_name(f"{img_path.stem}_truth.csv"))
 
-    df, mode, _ = extract_series(
+    df, mode, _, _ = extract_series(
         img_path,
         x_ref=(meta["xmin"], meta["xmax"]),
         y_ref=(meta["ymin"], meta["ymax"]),

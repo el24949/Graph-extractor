@@ -1,0 +1,16 @@
+{
+  "xmin": 0.0,
+  "xmax": 99.0,
+  "ymin": 22.513464711756836,
+  "ymax": 62.42880407694366,
+  "plot_bbox_px": {
+    "left": 42.72222222222223,
+    "right": 785.0,
+    "top": 15.0,
+    "bottom": 361.3888888888889
+  },
+  "kind": "trend_seasonal",
+  "seed": 2003,
+  "n": 100,
+  "variant": "gray_axes"
+}

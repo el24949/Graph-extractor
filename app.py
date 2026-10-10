@@ -35,8 +35,8 @@ def analyze(img_path, x_ref, y_ref, tol_pct, h):
     """
     # Pixel run for the overlay, calibrated run for the data. src/ is left
     # unchanged, so this calls the pipeline twice rather than re-mapping.
-    px_df, mode, box = extract_series(img_path)
-    df, _, _ = extract_series(img_path, x_ref, y_ref)
+    px_df, mode, box, box_mode = extract_series(img_path)
+    df, *_ = extract_series(img_path, x_ref, y_ref)
 
     img = cv2.imread(str(img_path))
     overlay = draw_overlay(img, px_df["px_x"], px_df["px_y"], thickness=2)
@@ -55,6 +55,7 @@ def analyze(img_path, x_ref, y_ref, tol_pct, h):
     return {
         "df": df,
         "mode": mode,
+        "box_mode": box_mode,
         "box": box,
         "image_rgb": cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
         "overlay_rgb": cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB),
@@ -137,8 +138,8 @@ def main():
         return
     except ValueError as exc:
         msg = str(exc)
-        if "axis lines" in msg:
-            st.error("No plot area found: could not detect both axis lines in the image.")
+        if "No plot area found" in msg or "Invalid plot area" in msg:
+            st.error(f"No plot area found: no usable axis lines or gridlines. Details: {msg}")
         elif "line pixels" in msg:
             st.error("No line found inside the plot area (no coloured or dark pixels).")
         elif "too short" in msg or "No valid windows" in msg:
@@ -159,7 +160,8 @@ def main():
     col2.image(result["overlay_rgb"], caption="Extracted line (red)", width="stretch")
     left, top, right, bottom = result["box"]
     st.write(
-        f"Line mask mode: **{result['mode']}**; plot box (left, top, right, bottom): "
+        f"Plot area from: **{result['box_mode']}**; line mask mode: **{result['mode']}**; "
+        f"plot box (left, top, right, bottom): "
         f"({left}, {top}, {right}, {bottom}); {len(result['df'])} points extracted"
     )
     st.download_button(

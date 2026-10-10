@@ -1,0 +1,16 @@
+{
+  "xmin": 0.0,
+  "xmax": 199.0,
+  "ymin": 46.51921540750807,
+  "ymax": 100.25057160277744,
+  "plot_bbox_px": {
+    "left": 47.88888888888889,
+    "right": 457.5,
+    "top": 16.220920138888914,
+    "bottom": 293.0
+  },
+  "kind": "trend_seasonal",
+  "seed": 2007,
+  "n": 200,
+  "variant": "grid_only"
+}

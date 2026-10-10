@@ -28,11 +28,11 @@ def main():
     """Save an overlay for every sample chart to docs/overlays/."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for img_path in sorted(SAMPLES_DIR.glob("chart_[0-9][0-9].png")):
-        df, mode, _ = extract_series(img_path)
+        df, mode, _, box_mode = extract_series(img_path)
         overlay = draw_overlay(cv2.imread(str(img_path)), df["px_x"], df["px_y"])
         out_path = OUT_DIR / f"{img_path.stem}_overlay.png"
         cv2.imwrite(str(out_path), overlay)
-        print(f"{out_path.relative_to(ROOT)} (mode={mode})")
+        print(f"{out_path.relative_to(ROOT)} (line mode={mode}, plot area from {box_mode})")
 
 
 if __name__ == "__main__":

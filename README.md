@@ -45,6 +45,31 @@ Grayscale -> threshold dark pixels -> morphological opening with long thin
 horizontal/vertical kernels. Text and the data line are too short to survive;
 the axes survive. Their extent gives the plot box.
 
+To cope with real screenshots it also:
+
+- **Ignores the image border.** Lines starting within 2% of an image edge are
+  screenshot frames or window bars, not axes, and are skipped.
+- **Uses an adaptive darkness threshold.** Thresholds are set relative to the
+  background and tried from strict to loose (on white: 128, 160, 192). The
+  first one that gives a valid box wins. The strict step is the old fixed
+  threshold, so charts that already worked give exactly the same box; looser
+  steps only kick in when nothing is found, e.g. for mid-gray axes. (Otsu was
+  not used because on mostly white charts it also picks up light gridlines and
+  fills, and it would move the threshold on charts that already worked.)
+- **Picks axes by position.** The lowest long horizontal line is the x axis
+  and the leftmost long vertical line is the y axis, so a full box, a zero
+  line or dark gridlines do not confuse it.
+- **Falls back to gridlines.** If no axes are found, it uses the outermost
+  light gridlines (or how far they reach) as the box.
+- **Validates the box.** It fails with a clear error if the bottom is not
+  below the top, the left is not left of the right, the box is tiny (a side
+  under 10% of the image) or covers almost the whole image (over 90%).
+
+It reports which method was used: `axes` or `grid`. Besides the 15 clean
+charts, it is tested on 12 harder synthetic charts in `samples/robust/`
+(`python -m src.generate_samples --robust`): a 10 px dark frame, mid-gray axes,
+gridlines with no axes, and a full box. All boxes are within 3 px.
+
 ### 3.2 Line isolation (`src/extract.py`)
 Crop inside the box (3 px inset to drop the axis lines). Keep **colored**
 pixels via HSV saturation (grid and axes are gray). **Fallback:** if there are
@@ -149,47 +174,60 @@ Risk climbs from 0% at step 1 to about 80% at step 10 for this chart.
 
 ## 5. Real-chart test
 
-**What we tried.** After the synthetic results, the unchanged pipeline was run
-on five real chart screenshots (`samples/real/`): a stock index, NOAA global
+**What we tried.** After the synthetic results, the pipeline was run on five
+real chart screenshots (`samples/real/`): a stock index, NOAA global
 temperatures, an Excel rainfall chart, a matplotlib chart with two lines, and
-a speed-time graph with markers and a dense grid. No code was changed for
-this test.
+a speed-time graph with markers and a dense grid.
 
-**Result: it failed on all five.** Three stopped with "Could not find both
-axis lines". The other two ran but returned an invalid plot box, so their
-output is not usable.
+**First attempt: it failed on all five.** Plot-area detection assumed solid,
+dark axis lines and nothing darker or longer in the image. Three charts
+stopped with "Could not find both axis lines" (no axes, or gray axes). The
+other two returned an invalid box because a screenshot frame or black bar was
+taken as an axis.
 
-| chart | result | cause |
-|---|---|---|
-| `real_01` | failed (error) | No axis lines, only light gridlines |
-| `real_02` | failed (wrong output) | Black bar at the top of the screenshot taken as the x-axis; two lines, logo and legend in the plot |
-| `real_03` | failed (error) | No axis lines, only gridlines |
-| `real_04` | failed (wrong output) | Screenshot frame taken as both axes; two lines, so the median jumps between them |
-| `real_05` | failed (error) | Axes are mid-grey, lighter than the dark-pixel threshold |
+**After making plot-area detection robust** (section 3.1): 1 worked, 3 partly,
+1 still failed. Line isolation was not changed, and most of what is still
+wrong comes from it.
+
+| chart | before | after | what is still wrong |
+|---|---|---|---|
+| `real_01` | failed (error) | **failed (error)** | No axes, and the filled area under the line hides the gridlines |
+| `real_02` | failed (wrong output) | **partly** | Box correct; line drops onto the NOAA logo inside the plot |
+| `real_03` | failed (error) | **worked** | Box from gridlines; line traced (flat after the last point) |
+| `real_04` | failed (wrong output) | **partly** | Box correct; two lines, so the median jumps between them |
+| `real_05` | failed (error) | **partly** | Gray axes found; y axis cut off at the image top, so the box top is the image edge |
 
 Details in `docs/real_results.md`; overlays in `docs/overlays/real/`.
 
-![real_02: the extracted line (red) follows the red series in places but drops onto the logo and legend](docs/overlays/real/real_02_overlay.png)
+![real_02: box now correct, the extracted line (red) follows the series but drops onto the NOAA logo](docs/overlays/real/real_02_overlay.png)
 
-**Why.** Plot-area detection assumes solid, dark axis lines and nothing
-darker or longer in the image. Real charts often have no axis lines, grey
-axes, or screenshot borders. Line isolation assumes exactly one coloured line
-and nothing else coloured inside the plot. Real charts have several lines,
-legends, logos and filled areas.
-
-**This is an honest limitation.** This version was built and tested only on
-synthetic charts, and the 1-5% extraction errors in section 4 only hold for
-charts like those. It is not yet a tool for arbitrary real charts.
+**This is still an honest limitation.** The pipeline was built and tested on
+synthetic charts. The 1-5% extraction errors in section 4 only hold for charts
+like those. On real charts, finding the plot area now works in 4 of 5 cases,
+but getting the right line out still needs work: multiple lines, logos and
+fills inside the plot break line isolation. It is not yet a tool for arbitrary
+real charts.
 
 ## 6. Assumptions and limitations
 
 - **Axis values are supplied, not read.** OCR of tick labels is not
   implemented; the user (or tests) provides two reference values per axis.
 - Single line, line chart, mostly white background, numeric x-axis.
-- **Fails on real charts.** All five real screenshots tested failed (section 5):
-  no axis lines, grey axes, screenshot borders, and multiple lines all break it.
-- Test charts hide the top/right border, so plot-area detection is easier
-  than on real charts with a full box.
+- **Real charts mostly do not work end to end yet.** Of five real screenshots
+  (section 5), 1 worked, 3 partly, 1 failed.
+- **Line isolation is the weak point on real charts.** It assumes one coloured
+  line and nothing else coloured in the plot; several lines, logos and filled
+  areas break it.
+- **Filled areas can hide gridlines.** When a chart has no axes and a fill
+  under the line, the gridline fallback can fail.
+- **Light backgrounds only.** Thresholds are relative to the background and
+  assume dark lines on a light background; dark-mode charts are not handled.
+- **The box ends where the lines end.** If an axis is cut off at the image edge,
+  that edge becomes the box edge, which is not a labelled value.
+- **The line is extended flat** from its last found point to the box edge when
+  the data stops before the edge.
+- The 15 main test charts hide the top/right border; full boxes, frames, gray
+  axes and gridline-only charts are tested separately in `samples/robust/`.
 - Black/gray lines depend on the dark-pixel fallback; dark text or markers
   inside the plot area can confuse it.
 - Per-column median flattens sharp spikes.
@@ -234,8 +272,8 @@ Then open the URL it prints (usually http://localhost:8501).
 3. Set the tolerance (what counts as "wrong", as % of the range) and the
    forecast horizon `h`.
 
-The page shows the original chart next to the extracted line in red, the mask
-mode (`color` or `dark`), the chosen model, the overall P(wrong) with its 95%
+The page shows the original chart next to the extracted line in red, how the plot
+area was found (`axes` or `grid`), the line mask mode (`color` or `dark`), the chosen model, the overall P(wrong) with its 95%
 CI, a chart of the series with the forecast, and a table of P(wrong) with CI
 for each forecast step. A button downloads the extracted series as CSV.
 Problems (no axes found, no line found, series too flat) are shown as error
@@ -257,6 +295,7 @@ Leave out all four limits to get pixel coordinates instead.
 Other commands:
 
 - `python -m src.generate_samples`: regenerate the synthetic charts
+- `python -m src.generate_samples --robust`: regenerate the harder variants in `samples/robust/`
 - `python -m src.evaluate`: extraction accuracy table, saved to `docs/extraction_results.md`
 - `python -m src.overlay`: overlay images, saved to `docs/overlays/`
 - `pytest`: run the tests
@@ -268,6 +307,7 @@ app.py      Streamlit web app
 src/        extract, calibrate, pipeline, forecast, validate, risk, evaluate, overlay
 tests/      pytest suites
 samples/    synthetic charts + truth CSV + meta JSON
+samples/robust/  harder synthetic charts: frame, gray axes, gridlines only, full box
 samples/real/  five real chart screenshots (section 5)
 docs/       results tables (synthetic, real), overlays
 ```

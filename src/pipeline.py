@@ -14,7 +14,7 @@ import cv2
 import pandas as pd
 
 from src.calibrate import calibrate
-from src.extract import detect_plot_area, extract_line_pixels
+from src.extract import extract_line_pixels, find_plot_area
 
 
 def extract_series(img_path, x_ref=None, y_ref=None):
@@ -25,8 +25,9 @@ def extract_series(img_path, x_ref=None, y_ref=None):
     (left/right, bottom/top) to calibrate. If both are given, the DataFrame has
     columns x, y; if neither is given, it has pixel columns px_x, px_y.
 
-    Returns (df, mode, box), where mode is "color" or "dark" and box is the
-    detected (left, top, right, bottom) pixel box.
+    Returns (df, mode, box, box_mode): mode is the line mask used ("color" or
+    "dark"), box is the detected (left, top, right, bottom) pixel box, and
+    box_mode says how the box was found ("axes" or "grid").
     """
     if (x_ref is None) != (y_ref is None):
         raise ValueError("Give both x_ref and y_ref, or neither")
@@ -35,11 +36,11 @@ def extract_series(img_path, x_ref=None, y_ref=None):
     if img is None:
         raise FileNotFoundError(f"Could not read image: {img_path}")
 
-    box = detect_plot_area(img)
+    box, box_mode = find_plot_area(img)
     px_x, px_y, mode = extract_line_pixels(img, box)
 
     if x_ref is None:
-        return pd.DataFrame({"px_x": px_x, "px_y": px_y}), mode, box
+        return pd.DataFrame({"px_x": px_x, "px_y": px_y}), mode, box, box_mode
 
     # Pair each axis value with the matching detected edge. The y refs go
     # bottom -> ymin and top -> ymax, which flips the image's downward y axis.
@@ -50,7 +51,7 @@ def extract_series(img_path, x_ref=None, y_ref=None):
         x_ref=((left, x_ref[0]), (right, x_ref[1])),
         y_ref=((bottom, y_ref[0]), (top, y_ref[1])),
     )
-    return pd.DataFrame({"x": x_vals, "y": y_vals}), mode, box
+    return pd.DataFrame({"x": x_vals, "y": y_vals}), mode, box, box_mode
 
 
 def main():
@@ -72,9 +73,9 @@ def main():
     else:
         parser.error("give all four of --xmin --xmax --ymin --ymax, or none for pixel output")
 
-    df, mode, box = extract_series(args.image, x_ref, y_ref)
+    df, mode, box, box_mode = extract_series(args.image, x_ref, y_ref)
     df.to_csv(args.out, index=False)
-    print(f"Saved {len(df)} points to {args.out} (mode={mode}, box={box})")
+    print(f"Saved {len(df)} points to {args.out} (line mode={mode}, plot area from {box_mode}, box={box})")
 
 
 if __name__ == "__main__":

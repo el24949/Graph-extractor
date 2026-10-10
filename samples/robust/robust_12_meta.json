@@ -1,0 +1,16 @@
+{
+  "xmin": 0.0,
+  "xmax": 299.0,
+  "ymin": 40.40676367435654,
+  "ymax": 122.2346775805021,
+  "plot_bbox_px": {
+    "left": 62.66666666666666,
+    "right": 1182.0,
+    "top": 18.0,
+    "bottom": 553.6666666666667
+  },
+  "kind": "trend_seasonal",
+  "seed": 2011,
+  "n": 300,
+  "variant": "full_box"
+}

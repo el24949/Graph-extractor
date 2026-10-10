@@ -91,7 +91,7 @@ def test_wilson_known_case():
 def test_forecast_with_risk_on_chart_04():
     img_path = SAMPLES_DIR / "chart_04.png"
     meta = json.loads((SAMPLES_DIR / "chart_04_meta.json").read_text())
-    df, _, _ = extract_series(img_path, (meta["xmin"], meta["xmax"]), (meta["ymin"], meta["ymax"]))
+    df, *_ = extract_series(img_path, (meta["xmin"], meta["xmax"]), (meta["ymin"], meta["ymax"]))
     _, y = resample_series(df["x"], df["y"], n=100)
 
     result = forecast_with_risk(y, MODELS, tol_pct=10)
