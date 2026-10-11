@@ -82,7 +82,7 @@ def main():
         hue = colors[idx - 1]["hue"] if idx else None
         hex_color = colors[idx - 1]["hex"] if idx else "none (dark fallback)"
 
-        px, mode, box, box_mode = extract_series(path, target_hue=hue)
+        px, mode, box, box_mode = extract_series(path, target_hue=hue, pixels=True)
         if args.ticks:
             x_ticks, y_ticks = TICKS[name]
             df, *_ = extract_series(path, target_hue=hue, x_ticks=x_ticks, y_ticks=y_ticks)

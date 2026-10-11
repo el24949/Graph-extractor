@@ -108,15 +108,30 @@ value = v1 + (p - p1) * (v2 - v1) / (p2 - p1)
 The image y-axis is flipped; passing (bottom, ymin) and (top, ymax) makes
 `p2 - p1` negative, so no special case is needed.
 
-The two reference points per axis are either:
+The two reference points per axis are one of:
 
-- **Box edges** (default): the plot box edges, paired with the axis values
-  the user enters for them (`xmin`/`xmax`/`ymin`/`ymax`).
+- **Relative (default, no input):** the plot box edges, paired with 0 and
+  100. x is then % of the plot width and y is % of the plot height. The
+  output says the units are relative (`df.attrs["units"]`, and the app and
+  command line print it). These are not the chart's real values, but the
+  shape of the series is the same.
+- **Box edges with real limits:** the plot box edges, paired with the axis
+  values the user enters for them (`xmin`/`xmax`/`ymin`/`ymax`).
 - **Reference ticks:** any two labelled ticks or gridlines per axis, given as
   a pixel position in the full image and its value (`x_ticks`, `y_ticks` in
   `extract_series`; `--xtick`/`--ytick` on the command line). They go
   straight to `calibrate`, so the values no longer depend on where the box
   edges are. The two pixels (and the two values) of an axis must differ.
+
+**Relative units and the risk estimate.** Rolling-validation errors are a %
+of the training range, so P(wrong) should not depend on the units. On the 15
+synthetic charts the chosen model is the same in relative and real units on
+all 15, and P(wrong) is identical on 12 (tested exactly on `chart_04`). On
+the other 3 (`chart_05`, `chart_09`, `chart_13`, all ETS) it differs by at
+most one window per step (0.032) and 0.022 overall, because the ETS and ARIMA
+fits in statsmodels do not converge exactly the same way on rescaled data
+(on `chart_09` ARIMA even fails to converge in a different number of
+windows). The naive model is exactly scale-free.
 
 On the 15 synthetic charts, ticks placed inside the box and valued as the
 box-edge calibration values them give the same output (tested). Ticks at the
@@ -276,9 +291,14 @@ truth. **n = 4 is too small to generalise.** Details:
 
 ## 6. Assumptions and limitations
 
-- **Axis values are supplied, not read.** OCR of tick labels is not
-  implemented; the user (or tests) provides two reference values per axis,
-  either at the box edges or at two reference ticks.
+- **Axis values are not read from the image.** OCR of tick labels is not
+  implemented (future work). Without input the values are relative (0-100% of
+  the plot box); for real values the user provides two reference values per
+  axis, either at the box edges or at two reference ticks.
+- **Relative units are not quite unit-free for the risk estimate.** The chosen
+  model was the same on all 15 synthetic charts, but P(wrong) differed by up to
+  0.032 per step on 3 of them, because the ETS/ARIMA fits are not exactly scale
+  invariant (section 3.3).
 - **Box-edge limits are easy to get wrong.** They must be the values at the
   box edges, but people naturally type the first and last tick labels, which
   usually sit inside the box. On the held-out test this made the numbers wrong
@@ -352,8 +372,8 @@ source .venv/bin/activate       # macOS / Linux
 pip install -r requirements.txt
 ```
 
-Tick-label reading (OCR) is not implemented, so no OCR library is installed.
-Axis values are entered by hand.
+Tick-label reading (OCR) is not implemented (future work), so no OCR library
+is installed. Values are relative unless real axis values are entered by hand.
 
 ### Web app
 
@@ -363,26 +383,46 @@ streamlit run app.py
 
 Then open the URL it prints (usually http://localhost:8501).
 
-1. Upload a line chart (PNG or JPG) in the sidebar.
-2. Choose the **Calibration**:
-   - **Box edges:** enter the axis values at the edges of the plot area:
-     `xmin`, `xmax`, `ymin`, `ymax`. These must be the values at the box
+**Upload only (the default).** Upload a line chart (PNG or JPG) in the
+sidebar. That is all: the page shows the extraction, the forecast and
+P(wrong).
+
+**Values are relative unless you give real ones.** Without axis values, x is
+% of the plot width and y is % of the plot height; the page says so. The
+shape, the chosen model and P(wrong) barely depend on this (the tolerance is a
+% of the range; section 3.3), but the numbers are not the chart's values.
+Reading the tick labels automatically (OCR) is future work.
+
+Optional, in the sidebar:
+
+- **Line to extract.** A swatch for each line colour found in the plot area;
+  choose one, or "Auto" to use all coloured pixels (a black or gray line has
+  no swatch and uses the dark fallback). Choose one when the chart has
+  several lines.
+- **Tolerance** (what counts as "wrong", as % of the range) and the forecast
+  horizon `h`.
+
+**Advanced** (a collapsed section in the sidebar; it opens by itself when the
+plot box is not found):
+
+1. **Axis values:**
+   - **Relative** (default): nothing to enter.
+   - **Real limits (box edges):** the axis values at the edges of the plot
+     box: `xmin`, `xmax`, `ymin`, `ymax`. These must be the values at the box
      edges, not the first and last tick labels (which are usually inside).
-   - **Reference ticks:** for each axis, enter two labelled ticks as a pixel
+   - **Reference ticks:** for each axis, two labelled ticks as a pixel
      position in the full image and its value (e.g. x pixel 103 = 1.0). They
      start on the box edges. The "Calibration preview" draws them over the
      image (blue vertical lines for x, orange horizontal lines for y); move
      each until it sits on the tick whose value you entered. The two pixels of
      an axis must differ.
-
-   Values are not read from the image.
-3. Check the plot box. "Auto" detects it. If detection fails, the page shows
-   the error and switches to "Manual", starting from the middle 80% of the
-   image; you can also choose Manual yourself (it then starts from the
-   detected box). Drag the four sliders (left, top, right, bottom, in pixels)
-   until the green box in the live preview sits on the plot area, ideally on
-   gridlines or tick marks whose values you know, and enter those values as
-   the axis values in step 2.
+2. **Plot box:** "Auto" detects it. If detection fails, the page shows the
+   error and switches to "Manual", starting from the middle 80% of the image;
+   you can also choose Manual yourself (it then starts from the detected box).
+   Drag the four sliders (left, top, right, bottom, in pixels) until the green
+   box in the live preview sits on the plot area. With real limits, put the
+   edges on gridlines or tick marks whose values you know and enter those
+   values.
 
 **Manual plot box: how it works and what it costs.**
 
@@ -394,34 +434,40 @@ What the box means: with box-edge calibration, its edges are taken as the axis l
 
 Not validated numerically on real charts: real-chart results are judged visually (no ground truth). The synthetic tests show a manual box equal to the true box is never worse than auto.
 
-Calibrating from two labelled ticks per axis instead of the box edges (step 2, "Reference ticks") removes this dependence.
-
-4. Pick the line to extract. The sidebar shows a swatch for each line colour
-   found in the plot area; choose one, or "Auto" to use all coloured pixels
-   (a black or gray line has no swatch and uses the dark fallback).
-5. Set the tolerance (what counts as "wrong", as % of the range) and the
-   forecast horizon `h`.
+Calibrating from two labelled ticks per axis instead of the box edges (Advanced, "Reference ticks") removes this dependence.
 
 The page shows the original chart next to the extracted line in red, how the
-plot area was found (`axes`, `grid` or `manual`), the line colour used, the line mask
+plot area was found (`axes`, `grid` or `manual`), the units (relative or axis
+values), the line colour used, the line mask
 mode (`color` or `dark`), the chosen model, the overall P(wrong) with its 95%
 CI, a chart of the series with the forecast, and a table of P(wrong) with CI
 for each forecast step. A button downloads the extracted series as CSV.
 Problems (no axes found, no line found, series too flat) are shown as error
 messages.
 
-To try it on a sample, upload `samples/chart_04.png` with x from `0` to `299`
-and y from `-33.77` to `62.76` (the values in `chart_04_meta.json`).
+To try it on a sample, upload `samples/chart_04.png`. For real values, set
+Advanced > Axis values > Real limits to x from `0` to `299` and y from
+`-33.77` to `62.76` (the values in `chart_04_meta.json`); the chosen model
+(naive) and P(wrong) (0.61) are the same either way.
 
 ### Command line
 
-Extract one chart to CSV:
+Extract one chart to CSV, image only:
+
+```
+python -m src.pipeline samples/chart_04.png --out out.csv
+```
+
+The values are relative (x in % of the plot width, y in % of the plot
+height), and the command prints `Units: relative ...`. For real values give
+the axis values at the box edges:
 
 ```
 python -m src.pipeline samples/chart_04.png --xmin 0 --xmax 299 --ymin -33.77 --ymax 62.76 --out out.csv
 ```
 
-Leave out all four limits to get pixel coordinates instead.
+or two reference ticks per axis (below). `--pixels` gives the raw pixel path
+(`px_x`, `px_y`) instead.
 
 For a chart with several lines, list the colours and pick one by number:
 

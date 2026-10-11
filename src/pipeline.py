@@ -4,11 +4,14 @@ Runs plot-area detection, line isolation and (optionally) calibration.
 Uses the image alone: nothing here reads the *_meta.json ground truth.
 
 CLI, from the project root:
+    python -m src.pipeline image.png --out out.csv
     python -m src.pipeline image.png --list-colors
     python -m src.pipeline image.png --color 1 --xmin 0 --xmax 99 --ymin 40 --ymax 60 --out out.csv
     python -m src.pipeline image.png --box 80 40 810 240 --out out.csv
     python -m src.pipeline image.png --xtick 103 1 --xtick 553 5 --ytick 410 1 --ytick 75 6 --out out.csv
-Leave out the axis limits to get pixel coordinates instead. Give --xtick and
+Leave out the axis limits to get relative units: x from 0 to 100% of the plot
+width, y from 0 to 100% of the plot height (--pixels gives pixel coordinates
+instead). Give the four limits for real values, or --xtick and
 --ytick (twice each: pixel, value) instead of the limits to calibrate from two
 labelled ticks per axis rather than the box edges. Leave out --color
 to use all coloured pixels (or the dark fallback for a black line). Give --box
@@ -23,6 +26,16 @@ import pandas as pd
 
 from src.calibrate import calibrate
 from src.extract import extract_line_pixels, find_plot_area, find_series_colors
+
+# What the x, y columns mean, stored in df.attrs["units"] by extract_series.
+UNITS_DATA = "data"
+UNITS_RELATIVE = "relative"
+UNITS_PIXELS = "pixels"
+UNITS_TEXT = {
+    UNITS_DATA: "axis values",
+    UNITS_RELATIVE: "relative: x in % of the plot width, y in % of the plot height (not real values)",
+    UNITS_PIXELS: "pixels in the full image (y grows downwards)",
+}
 
 # extract_line_pixels crops this many pixels inside the box, so a manual box
 # must leave at least one pixel row/column after cropping.
@@ -110,13 +123,33 @@ def series_colors(img_path, box=None):
     return box, box_mode, find_series_colors(img, box)
 
 
-def extract_series(img_path, x_ref=None, y_ref=None, target_hue=None, box=None, x_ticks=None, y_ticks=None):
+def _frame(x, y, units):
+    df = pd.DataFrame({"x": x, "y": y})
+    df.attrs["units"] = units
+    return df
+
+
+def extract_series(
+    img_path, x_ref=None, y_ref=None, target_hue=None, box=None, x_ticks=None, y_ticks=None, pixels=False
+):
     """Extract the line from the chart at img_path.
 
     x_ref = (xmin, xmax) and y_ref = (ymin, ymax) are the axis values at the
     edges of the plot area. They are paired with the box edges (left/right,
-    bottom/top) to calibrate. If both are given, the DataFrame has columns
-    x, y; if neither is given, it has pixel columns px_x, px_y.
+    bottom/top) to calibrate, and the DataFrame has columns x, y.
+
+    Axis values are optional. With neither limits nor ticks, x and y are in
+    relative units: x from 0 (left edge of the plot box) to 100 (right edge)
+    and y from 0 (bottom edge) to 100 (top edge). That is the same as the
+    limits (0, 100), (0, 100), so the shape of the series, and anything
+    computed relative to its range, is the same as with real limits.
+
+    df.attrs["units"] says which it is: "data" (limits or ticks given),
+    "relative" or "pixels"; UNITS_TEXT describes each.
+
+    pixels=True returns the raw pixel path instead, as columns px_x, px_y in
+    full-image coordinates (for drawing overlays); it cannot be combined with
+    limits or ticks.
 
     target_hue (OpenCV hue 0-179, e.g. a colour from series_colors) extracts
     only the line of that colour. Without it, all coloured pixels are used.
@@ -141,6 +174,8 @@ def extract_series(img_path, x_ref=None, y_ref=None, target_hue=None, box=None, 
         raise ValueError("Give both x_ticks and y_ticks, or neither")
     if x_ref is not None and x_ticks is not None:
         raise ValueError("Give either axis limits (x_ref, y_ref) or reference ticks (x_ticks, y_ticks), not both")
+    if pixels and (x_ref is not None or x_ticks is not None):
+        raise ValueError("pixels=True returns pixel coordinates; do not give limits or ticks with it")
     if x_ticks is not None:
         x_ticks = validate_ticks(x_ticks, "x")
         y_ticks = validate_ticks(y_ticks, "y")
@@ -149,12 +184,18 @@ def extract_series(img_path, x_ref=None, y_ref=None, target_hue=None, box=None, 
     box, box_mode = _plot_area(img, box)
     px_x, px_y, mode = extract_line_pixels(img, box, target_hue=target_hue)
 
+    if pixels:
+        df = pd.DataFrame({"px_x": px_x, "px_y": px_y})
+        df.attrs["units"] = UNITS_PIXELS
+        return df, mode, box, box_mode
+
     if x_ticks is not None:
         x_vals, y_vals = calibrate(px_x, px_y, x_ref=x_ticks, y_ref=y_ticks)
-        return pd.DataFrame({"x": x_vals, "y": y_vals}), mode, box, box_mode
+        return _frame(x_vals, y_vals, UNITS_DATA), mode, box, box_mode
 
+    units = UNITS_DATA
     if x_ref is None:
-        return pd.DataFrame({"px_x": px_x, "px_y": px_y}), mode, box, box_mode
+        x_ref, y_ref, units = (0.0, 100.0), (0.0, 100.0), UNITS_RELATIVE
 
     # Pair each axis value with the matching box edge. The y refs go
     # bottom -> ymin and top -> ymax, which flips the image's downward y axis.
@@ -165,7 +206,7 @@ def extract_series(img_path, x_ref=None, y_ref=None, target_hue=None, box=None, 
         x_ref=((left, x_ref[0]), (right, x_ref[1])),
         y_ref=((bottom, y_ref[0]), (top, y_ref[1])),
     )
-    return pd.DataFrame({"x": x_vals, "y": y_vals}), mode, box, box_mode
+    return _frame(x_vals, y_vals, units), mode, box, box_mode
 
 
 def main():
@@ -201,6 +242,9 @@ def main():
         action="append",
         metavar=("PY", "VAL"),
         help="y reference tick: pixel y (full image) and its value; give twice, instead of --ymin/--ymax",
+    )
+    parser.add_argument(
+        "--pixels", action="store_true", help="output pixel coordinates (px_x, px_y) instead of relative units"
     )
     args = parser.parse_args()
 
@@ -239,17 +283,22 @@ def main():
     elif all(v is not None for v in limits):
         x_ref, y_ref = (args.xmin, args.xmax), (args.ymin, args.ymax)
     else:
-        parser.error("give all four of --xmin --xmax --ymin --ymax, or none for pixel output")
+        parser.error("give all four of --xmin --xmax --ymin --ymax, or none for relative units")
+    if args.pixels and (x_ref is not None or ticks is not None):
+        parser.error("--pixels cannot be combined with axis limits or ticks")
 
     try:
         df, mode, box, box_mode = extract_series(
             args.image, x_ref, y_ref, target_hue, box=args.box,
-            x_ticks=ticks[0] if ticks else None, y_ticks=ticks[1] if ticks else None,
+            x_ticks=ticks[0] if ticks else None, y_ticks=ticks[1] if ticks else None, pixels=args.pixels,
         )
     except ValueError as exc:
         parser.exit(1, f"Error: {exc}\n")
     df.to_csv(args.out, index=False)
     print(f"Saved {len(df)} points to {args.out} (line mode={mode}, plot area from {box_mode}, box={box})")
+    print(f"Units: {UNITS_TEXT[df.attrs['units']]}")
+    if df.attrs["units"] == UNITS_RELATIVE:
+        print("For real values give --xmin --xmax --ymin --ymax (box edges) or --xtick/--ytick (reference ticks).")
 
 
 if __name__ == "__main__":

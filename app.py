@@ -21,10 +21,14 @@ import streamlit as st  # noqa: E402
 
 from src.forecast import MODELS, resample_series  # noqa: E402
 from src.overlay import draw_overlay  # noqa: E402
-from src.pipeline import extract_series, series_colors  # noqa: E402
+from src.pipeline import UNITS_RELATIVE, UNITS_TEXT, extract_series, series_colors  # noqa: E402
 from src.risk import forecast_with_risk  # noqa: E402
 
 N_RESAMPLE = 100
+
+VALUES_RELATIVE = "Relative (% of plot area)"
+VALUES_LIMITS = "Real limits (box edges)"
+VALUES_TICKS = "Reference ticks"
 
 
 def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None, box=None, x_ticks=None, y_ticks=None):
@@ -32,14 +36,15 @@ def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None, box=None, x_tic
 
     box: a manual (left, top, right, bottom) plot box, or None to detect it.
     x_ticks, y_ticks: two (pixel, value) reference ticks per axis, used instead
-    of the box-edge limits x_ref, y_ref (pass None for those).
+    of the box-edge limits x_ref, y_ref (pass None for those). With neither,
+    the values are relative (0-100% of the plot box); result["units"] says which.
 
     Returns a dict of everything the page shows. Raises ValueError with a
     readable message for the failures the page reports.
     """
     # Pixel run for the overlay, calibrated run for the data. src/ is left
     # unchanged, so this calls the pipeline twice rather than re-mapping.
-    px_df, mode, box, box_mode = extract_series(img_path, target_hue=target_hue, box=box)
+    px_df, mode, box, box_mode = extract_series(img_path, target_hue=target_hue, box=box, pixels=True)
     df, *_ = extract_series(img_path, x_ref, y_ref, target_hue=target_hue, box=box, x_ticks=x_ticks, y_ticks=y_ticks)
 
     img = cv2.imread(str(img_path))
@@ -58,6 +63,7 @@ def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None, box=None, x_tic
 
     return {
         "df": df,
+        "units": df.attrs["units"],
         "mode": mode,
         "box_mode": box_mode,
         "box": box,
@@ -112,7 +118,7 @@ def swatch_html(hex_color, label):
     )
 
 
-def forecast_figure(x, y, x_future, forecast, model):
+def forecast_figure(x, y, x_future, forecast, model, relative=False):
     """Matplotlib figure of the resampled series and the forecast."""
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(x, y, color="#1f77b4", linewidth=1.5, label="extracted series (resampled)")
@@ -127,8 +133,8 @@ def forecast_figure(x, y, x_future, forecast, model):
         label=f"forecast ({model})",
     )
     ax.axvline(x[-1], color="#999999", linewidth=0.8)
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
+    ax.set_xlabel("x (% of plot width)" if relative else "x")
+    ax.set_ylabel("y (% of plot height)" if relative else "y")
     ax.grid(True, color="#eeeeee")
     ax.legend(loc="best")
     fig.tight_layout()
@@ -155,30 +161,14 @@ def main():
 
     with st.sidebar:
         uploaded = st.file_uploader("Chart image", type=["png", "jpg", "jpeg"])
-        calibration = st.radio(
-            "Calibration",
-            ["Box edges", "Reference ticks"],
-            horizontal=True,
-            help="Box edges: enter the axis values at the edges of the plot box. "
-            "Reference ticks: enter two labelled ticks per axis (pixel position and value); "
-            "the box edges then need no known value.",
-        )
-        use_ticks = calibration == "Reference ticks"
-        if not use_ticks:
-            st.caption("Axis values at the edges of the plot area")
-            xmin = st.number_input("xmin", value=0.0)
-            xmax = st.number_input("xmax", value=100.0)
-            ymin = st.number_input("ymin", value=0.0)
-            ymax = st.number_input("ymax", value=100.0)
         tol_pct = st.slider("Tolerance (% of range)", min_value=1, max_value=30, value=10)
         h = st.slider("Forecast horizon h", min_value=5, max_value=20, value=10)
 
     if uploaded is None:
-        st.info("Upload a line chart image in the sidebar to start.")
-        return
-
-    if not use_ticks and (xmin >= xmax or ymin >= ymax):
-        st.error("Axis limits must satisfy xmin < xmax and ymin < ymax.")
+        st.info(
+            "Upload a line chart image in the sidebar to start. Values are relative "
+            "(% of the plot area) unless you give real axis values under Advanced."
+        )
         return
 
     # Save the upload to a temp file so the pipeline can read it by path.
@@ -199,10 +189,34 @@ def main():
         except ValueError as exc:
             auto_error = str(exc)
 
-        # Plot box: Auto, or Manual with sliders. If detection failed, Manual
-        # is selected for a new upload and starts from the middle 80% of the image.
+        # The line colour picker is shown above Advanced but filled in after it,
+        # because a manual box changes which colours are found.
+        colour_area = st.sidebar.container()
         upload_key = f"{uploaded.name}-{uploaded.size}"
-        with st.sidebar:
+
+        # Advanced: real axis values, manual plot box, reference ticks. Opened
+        # by itself when detection fails, since the box must then be set by hand.
+        with st.sidebar.expander("Advanced", expanded=bool(auto_error)):
+            values = st.radio(
+                "Axis values",
+                [VALUES_RELATIVE, VALUES_LIMITS, VALUES_TICKS],
+                key=f"values-{upload_key}",
+                help="Relative: x and y in % of the plot area, no input needed. "
+                "Real limits: the axis values at the edges of the plot box. "
+                "Reference ticks: two labelled ticks per axis (pixel position and value).",
+            )
+            x_ref = y_ref = x_ticks = y_ticks = None
+            if values == VALUES_LIMITS:
+                st.caption("Axis values at the edges of the plot box (not the first and last tick labels)")
+                c1, c2 = st.columns(2)
+                xmin = c1.number_input("xmin", value=0.0, key=f"xmin-{upload_key}")
+                xmax = c2.number_input("xmax", value=100.0, key=f"xmax-{upload_key}")
+                ymin = c1.number_input("ymin", value=0.0, key=f"ymin-{upload_key}")
+                ymax = c2.number_input("ymax", value=100.0, key=f"ymax-{upload_key}")
+                x_ref, y_ref = (xmin, xmax), (ymin, ymax)
+
+            # Plot box: Auto, or Manual with sliders. If detection failed, Manual
+            # is selected for a new upload and starts from the middle 80% of the image.
             box_choice = st.radio(
                 "Plot box",
                 ["Auto", "Manual"],
@@ -221,21 +235,10 @@ def main():
                     st.slider("bottom", 0, height - 1, start[3], key=f"bottom-{upload_key}"),
                 )
 
-        if auto_error:
-            st.error(f"Automatic plot-area detection failed: {auto_error}")
-            if box_choice == "Auto":
-                st.info("Switch Plot box to Manual in the sidebar to set the plot area by hand.")
-                return
-            st.info(
-                "Manual mode is on. Drag the sliders until the green box sits on the plot area, "
-                "then enter the axis values at its edges."
-            )
-        # Reference ticks: two (pixel, value) points per axis, in full-image
-        # pixels. They start on the box edges; move them onto labelled ticks.
-        x_ticks = y_ticks = None
-        if use_ticks:
-            start = manual_box or auto_box or default_manual_box(width, height)
-            with st.sidebar:
+            # Reference ticks: two (pixel, value) points per axis, in full-image
+            # pixels. They start on the box edges; move them onto labelled ticks.
+            if values == VALUES_TICKS:
+                start = manual_box or auto_box or default_manual_box(width, height)
                 st.caption(f"Reference ticks: pixel (full image, {width} x {height}) and value")
                 x_ticks, y_ticks = [], []
                 for axis, pixels, store in (("x", (start[0], start[2]), x_ticks), ("y", (start[3], start[1]), y_ticks)):
@@ -247,12 +250,22 @@ def main():
                         store.append((p, v))
                 x_ticks, y_ticks = tuple(x_ticks), tuple(y_ticks)
 
-        if manual_box is not None or use_ticks:
-            shown_box = manual_box or auto_box
-            if use_ticks:
+        if x_ref is not None and (x_ref[0] >= x_ref[1] or y_ref[0] >= y_ref[1]):
+            st.error("Axis limits must satisfy xmin < xmax and ymin < ymax (Advanced, in the sidebar).")
+            return
+
+        if auto_error:
+            st.error(f"Automatic plot-area detection failed: {auto_error}")
+            if box_choice == "Auto":
+                st.info("Switch Plot box to Manual under Advanced in the sidebar to set the plot area by hand.")
+                return
+            st.info("Manual mode is on (Advanced, in the sidebar). Drag the sliders until the green box sits on the plot area.")
+
+        if manual_box is not None or x_ticks is not None:
+            if x_ticks is not None:
                 st.subheader("Calibration preview")
                 st.image(
-                    calibration_preview(img, shown_box, x_ticks, y_ticks),
+                    calibration_preview(img, manual_box or auto_box, x_ticks, y_ticks),
                     caption="Green: plot box. Blue: x reference ticks. Orange: y reference ticks. "
                     "Each line should sit on the tick whose value you entered.",
                     width="stretch",
@@ -265,7 +278,7 @@ def main():
             _, _, colors = series_colors(tmp.name, box=manual_box)
 
         # Line colours found in the plot area; the user picks which series to extract.
-        with st.sidebar:
+        with colour_area:
             st.caption("Line colours found in the plot area")
             if colors:
                 st.markdown(
@@ -282,19 +295,16 @@ def main():
         target_hue = colors[choice - 1]["hue"] if choice else None
         chosen = colors[choice - 1]["hex"] if choice else "auto"
 
-        if use_ticks:
-            result = analyze(tmp.name, None, None, tol_pct, h, target_hue, manual_box, x_ticks, y_ticks)
-        else:
-            result = analyze(tmp.name, (xmin, xmax), (ymin, ymax), tol_pct, h, target_hue=target_hue, box=manual_box)
+        result = analyze(tmp.name, x_ref, y_ref, tol_pct, h, target_hue, manual_box, x_ticks, y_ticks)
     except FileNotFoundError:
         st.error("Could not read the image. Is it a valid PNG or JPG?")
         return
     except ValueError as exc:
         msg = str(exc)
         if "Invalid manual box" in msg:
-            st.error(f"{msg}. Adjust the sliders in the sidebar.")
+            st.error(f"{msg}. Adjust the sliders under Advanced in the sidebar.")
         elif "ticks" in msg and msg.startswith("Invalid"):
-            st.error(f"{msg}. Adjust the reference ticks in the sidebar.")
+            st.error(f"{msg}. Adjust the reference ticks under Advanced in the sidebar.")
         elif "No plot area found" in msg or "Invalid plot area" in msg:
             st.error(f"No plot area found: no usable axis lines or gridlines. Details: {msg}")
         elif "chosen colour" in msg:
@@ -318,13 +328,20 @@ def main():
     col1.image(result["image_rgb"], caption="Original", width="stretch")
     col2.image(result["overlay_rgb"], caption="Extracted line (red)", width="stretch")
     left, top, right, bottom = result["box"]
+    relative = result["units"] == UNITS_RELATIVE
     st.write(
-        f"Plot area from: **{result['box_mode']}**; calibration: **{calibration.lower()}**; "
+        f"Plot area from: **{result['box_mode']}**; units: **{UNITS_TEXT[result['units']]}**; "
         f"line colour: **{chosen}**; "
         f"line mask mode: **{result['mode']}**; "
         f"plot box (left, top, right, bottom): "
         f"({left}, {top}, {right}, {bottom}); {len(result['df'])} points extracted"
     )
+    if relative:
+        st.info(
+            "Values are relative: x is % of the plot width and y is % of the plot height, "
+            "not the chart's real values. P(wrong) and the chosen model barely depend on this "
+            "(the tolerance is a % of the range). For real values, set them under Advanced in the sidebar."
+        )
     st.download_button(
         "Download extracted series (CSV)",
         data=result["df"].to_csv(index=False).encode("utf-8"),
@@ -347,7 +364,7 @@ def main():
     )
     st.caption(f"Overall 95% CI: [{lo_all:.2f}, {hi_all:.2f}]. Series resampled to {N_RESAMPLE} points.")
 
-    fig = forecast_figure(result["x"], result["y"], result["x_future"], risk["forecast"], risk["model"])
+    fig = forecast_figure(result["x"], result["y"], result["x_future"], risk["forecast"], risk["model"], relative)
     st.pyplot(fig)
     plt.close(fig)
 
