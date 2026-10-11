@@ -7,7 +7,10 @@ CLI, from the project root:
     python -m src.pipeline image.png --list-colors
     python -m src.pipeline image.png --color 1 --xmin 0 --xmax 99 --ymin 40 --ymax 60 --out out.csv
     python -m src.pipeline image.png --box 80 40 810 240 --out out.csv
-Leave out the axis limits to get pixel coordinates instead. Leave out --color
+    python -m src.pipeline image.png --xtick 103 1 --xtick 553 5 --ytick 410 1 --ytick 75 6 --out out.csv
+Leave out the axis limits to get pixel coordinates instead. Give --xtick and
+--ytick (twice each: pixel, value) instead of the limits to calibrate from two
+labelled ticks per axis rather than the box edges. Leave out --color
 to use all coloured pixels (or the dark fallback for a black line). Give --box
 to set the plot area by hand when detection fails or is wrong.
 """
@@ -15,6 +18,7 @@ to set the plot area by hand when detection fails or is wrong.
 import argparse
 
 import cv2
+import numpy as np
 import pandas as pd
 
 from src.calibrate import calibrate
@@ -63,6 +67,27 @@ def validate_manual_box(box, shape):
     return left, top, right, bottom
 
 
+def validate_ticks(ticks, axis):
+    """Check two reference ticks ((p1, v1), (p2, v2)) for one axis; return them as floats.
+
+    The pixels are full-image coordinates (x for the x axis, y for the y axis).
+    The two pixels must differ (else there is no scale) and so must the values
+    (else every point maps to the same value).
+    """
+    try:
+        (p1, v1), (p2, v2) = ticks
+        p1, v1, p2, v2 = (float(v) for v in (p1, v1, p2, v2))
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {axis} ticks {ticks}: give two (pixel, value) pairs") from None
+    if not np.all(np.isfinite([p1, v1, p2, v2])):
+        raise ValueError(f"Invalid {axis} ticks {ticks}: pixels and values must be finite numbers")
+    if p1 == p2:
+        raise ValueError(f"Invalid {axis} ticks {ticks}: the two pixels must be different")
+    if v1 == v2:
+        raise ValueError(f"Invalid {axis} ticks {ticks}: the two values must be different")
+    return (p1, v1), (p2, v2)
+
+
 def _plot_area(img, box):
     """The detected box, or the validated manual one. Returns (box, box_mode)."""
     if box is None:
@@ -85,7 +110,7 @@ def series_colors(img_path, box=None):
     return box, box_mode, find_series_colors(img, box)
 
 
-def extract_series(img_path, x_ref=None, y_ref=None, target_hue=None, box=None):
+def extract_series(img_path, x_ref=None, y_ref=None, target_hue=None, box=None, x_ticks=None, y_ticks=None):
     """Extract the line from the chart at img_path.
 
     x_ref = (xmin, xmax) and y_ref = (ymin, ymax) are the axis values at the
@@ -100,16 +125,33 @@ def extract_series(img_path, x_ref=None, y_ref=None, target_hue=None, box=None):
     plot-area detection is skipped; the box is validated (positive size,
     inside the image) and box_mode is "manual".
 
+    x_ticks = ((px1, v1), (px2, v2)) and y_ticks = ((py1, v1), (py2, v2)) are
+    an alternative to x_ref/y_ref: two labelled reference points per axis, as
+    pixel positions in full-image coordinates with their values. They are
+    passed straight to calibrate, so the box edges no longer need known
+    values. Give both, and not together with x_ref/y_ref.
+
     Returns (df, mode, box, box_mode): mode is the line mask used ("color" or
     "dark"), box is the (left, top, right, bottom) pixel box used, and
     box_mode says where it came from ("axes", "grid" or "manual").
     """
     if (x_ref is None) != (y_ref is None):
         raise ValueError("Give both x_ref and y_ref, or neither")
+    if (x_ticks is None) != (y_ticks is None):
+        raise ValueError("Give both x_ticks and y_ticks, or neither")
+    if x_ref is not None and x_ticks is not None:
+        raise ValueError("Give either axis limits (x_ref, y_ref) or reference ticks (x_ticks, y_ticks), not both")
+    if x_ticks is not None:
+        x_ticks = validate_ticks(x_ticks, "x")
+        y_ticks = validate_ticks(y_ticks, "y")
 
     img = _read_image(img_path)
     box, box_mode = _plot_area(img, box)
     px_x, px_y, mode = extract_line_pixels(img, box, target_hue=target_hue)
+
+    if x_ticks is not None:
+        x_vals, y_vals = calibrate(px_x, px_y, x_ref=x_ticks, y_ref=y_ticks)
+        return pd.DataFrame({"x": x_vals, "y": y_vals}), mode, box, box_mode
 
     if x_ref is None:
         return pd.DataFrame({"px_x": px_x, "px_y": px_y}), mode, box, box_mode
@@ -144,6 +186,22 @@ def main():
         metavar=("L", "T", "R", "B"),
         help="manual plot box in pixels (left top right bottom); skips plot-area detection",
     )
+    parser.add_argument(
+        "--xtick",
+        type=float,
+        nargs=2,
+        action="append",
+        metavar=("PX", "VAL"),
+        help="x reference tick: pixel x (full image) and its value; give twice, instead of --xmin/--xmax",
+    )
+    parser.add_argument(
+        "--ytick",
+        type=float,
+        nargs=2,
+        action="append",
+        metavar=("PY", "VAL"),
+        help="y reference tick: pixel y (full image) and its value; give twice, instead of --ymin/--ymax",
+    )
     args = parser.parse_args()
 
     try:
@@ -168,7 +226,15 @@ def main():
         target_hue = colors[args.color - 1]["hue"]
 
     limits = [args.xmin, args.xmax, args.ymin, args.ymax]
-    if all(v is None for v in limits):
+    ticks = None
+    if args.xtick is not None or args.ytick is not None:
+        if any(v is not None for v in limits):
+            parser.error("give either --xmin/--xmax/--ymin/--ymax or --xtick/--ytick, not both")
+        if args.xtick is None or args.ytick is None or len(args.xtick) != 2 or len(args.ytick) != 2:
+            parser.error("give --xtick PX VAL exactly twice and --ytick PY VAL exactly twice")
+        ticks = (tuple(map(tuple, args.xtick)), tuple(map(tuple, args.ytick)))
+        x_ref = y_ref = None
+    elif all(v is None for v in limits):
         x_ref = y_ref = None
     elif all(v is not None for v in limits):
         x_ref, y_ref = (args.xmin, args.xmax), (args.ymin, args.ymax)
@@ -176,7 +242,10 @@ def main():
         parser.error("give all four of --xmin --xmax --ymin --ymax, or none for pixel output")
 
     try:
-        df, mode, box, box_mode = extract_series(args.image, x_ref, y_ref, target_hue, box=args.box)
+        df, mode, box, box_mode = extract_series(
+            args.image, x_ref, y_ref, target_hue, box=args.box,
+            x_ticks=ticks[0] if ticks else None, y_ticks=ticks[1] if ticks else None,
+        )
     except ValueError as exc:
         parser.exit(1, f"Error: {exc}\n")
     df.to_csv(args.out, index=False)

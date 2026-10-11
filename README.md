@@ -108,6 +108,22 @@ value = v1 + (p - p1) * (v2 - v1) / (p2 - p1)
 The image y-axis is flipped; passing (bottom, ymin) and (top, ymax) makes
 `p2 - p1` negative, so no special case is needed.
 
+The two reference points per axis are either:
+
+- **Box edges** (default): the plot box edges, paired with the axis values
+  the user enters for them (`xmin`/`xmax`/`ymin`/`ymax`).
+- **Reference ticks:** any two labelled ticks or gridlines per axis, given as
+  a pixel position in the full image and its value (`x_ticks`, `y_ticks` in
+  `extract_series`; `--xtick`/`--ytick` on the command line). They go
+  straight to `calibrate`, so the values no longer depend on where the box
+  edges are. The two pixels (and the two values) of an axis must differ.
+
+On the 15 synthetic charts, ticks placed inside the box and valued as the
+box-edge calibration values them give the same output (tested). Ticks at the
+true positions are better than the detected box edges on every chart (mean
+RMSE 1.30% instead of 1.74%, `chart_01` 4.87% -> 3.40%), because they avoid
+the auto box's 1 px error on the right edge.
+
 ### 3.4 Forecasting (`src/forecast.py`)
 The extracted series has one point per pixel column (hundreds), so it is
 **resampled to 100 evenly spaced points**, which the models assume.
@@ -249,6 +265,11 @@ them with the box edges (e.g. a peak at (4, 6) came out as (3.63, 5.72)).
 The limits were read by eye, and two (`xmin` on `chart2` and `chart3`) were
 marked uncertain beforehand.
 
+**After, post-hoc (no longer held-out):** re-calibrated from two measured
+reference ticks per axis (section 3.3), the values look plausible on 3 of 4
+(e.g. that peak comes out as (4.00, 5.96)); `chart3` stays wrong because its
+line is wrong.
+
 The result is judged visually from the overlays; there is no numeric ground
 truth. **n = 4 is too small to generalise.** Details:
 `docs/real_heldout_results.md`; overlays in `docs/overlays/real_heldout/`.
@@ -256,10 +277,20 @@ truth. **n = 4 is too small to generalise.** Details:
 ## 6. Assumptions and limitations
 
 - **Axis values are supplied, not read.** OCR of tick labels is not
-  implemented; the user (or tests) provides two reference values per axis.
+  implemented; the user (or tests) provides two reference values per axis,
+  either at the box edges or at two reference ticks.
+- **Box-edge limits are easy to get wrong.** They must be the values at the
+  box edges, but people naturally type the first and last tick labels, which
+  usually sit inside the box. On the held-out test this made the numbers wrong
+  on all four charts. Reference ticks avoid this, but their pixel positions
+  have to be read off the image by hand (the app draws them over the image to
+  check), and a tick placed a few pixels off scales every value.
 - One line is extracted at a time; line chart, mostly white background, numeric x-axis.
-- **Real charts mostly do not work end to end yet.** Of five real screenshots
-  (section 5), 1 worked, 3 partly, 1 failed.
+- **Real charts work only with help.** Of five real screenshots (section 5),
+  3 worked, 1 partly, and `real_01` fails on Auto but works with a manual box;
+  the charts with several lines need a colour to be chosen. Of four held-out
+  charts, the line was right on 3 and wrong on 1 (a black line on a black
+  grid). These are visual judgements on 9 charts, not a measured accuracy.
 - **Several lines need a colour to be chosen.** On Auto, the tracker can switch
   to another series where two lines cross. Lines of very similar colours
   (within about 20 degrees of hue) cannot be separated.
@@ -278,10 +309,13 @@ truth. **n = 4 is too small to generalise.** Details:
   the image, not to be on the plot area.
 - **The automatic box is about 1 px too wide on the right.** On all 15 main
   charts the detected right edge is 1 px past the true edge (the axis line's
-  last anti-aliased pixel), which slightly stretches x. With the exact box
-  the RMSE is lower on every chart, by up to 1.2 points (`chart_01`: 4.9% ->
-  3.6%).
-- Automatic detection places the right edge 1 px too far (it picks up the axis line’s last anti-aliased pixel); known, not fixed.
+  last anti-aliased pixel), which slightly stretches x with box-edge
+  calibration. With the exact box the RMSE is lower on every chart, by up to
+  1.2 points (`chart_01`: 4.9% -> 3.6%). Known, not fixed in detection;
+  reference-tick calibration does not depend on the box edges and avoids it.
+- **Black lines on a black grid fail.** The dark fallback keeps every dark
+  pixel, so when the gridlines are as dark and thick as the line, the tracker
+  can follow a gridline instead (held-out `chart3`).
 - **The box ends where the lines end.** If an axis is cut off at the image edge,
   that edge becomes the box edge, which is not a labelled value.
 - **Hidden stretches are interpolated.** Where another series is drawn over the
@@ -330,8 +364,18 @@ streamlit run app.py
 Then open the URL it prints (usually http://localhost:8501).
 
 1. Upload a line chart (PNG or JPG) in the sidebar.
-2. Enter the axis values at the edges of the plot area: `xmin`, `xmax`,
-   `ymin`, `ymax`. These are not read from the image.
+2. Choose the **Calibration**:
+   - **Box edges:** enter the axis values at the edges of the plot area:
+     `xmin`, `xmax`, `ymin`, `ymax`. These must be the values at the box
+     edges, not the first and last tick labels (which are usually inside).
+   - **Reference ticks:** for each axis, enter two labelled ticks as a pixel
+     position in the full image and its value (e.g. x pixel 103 = 1.0). They
+     start on the box edges. The "Calibration preview" draws them over the
+     image (blue vertical lines for x, orange horizontal lines for y); move
+     each until it sits on the tick whose value you entered. The two pixels of
+     an axis must differ.
+
+   Values are not read from the image.
 3. Check the plot box. "Auto" detects it. If detection fails, the page shows
    the error and switches to "Manual", starting from the middle 80% of the
    image; you can also choose Manual yourself (it then starts from the
@@ -346,11 +390,11 @@ Automatic detection can fail on real charts (no axes, a fill hiding the gridline
 
 Design choice: I kept a human-in-the-loop fallback instead of guessing. A wrong automatic box silently gives wrong numbers; a manual box makes the assumption visible.
 
-What the box means: its edges are taken as the axis limits you type, so calibration is only as good as the box placement. On real_01, 1 px is about 2 index points, so a box placed by eye is less precise than one measured from tick positions.
+What the box means: with box-edge calibration, its edges are taken as the axis limits you type, so calibration is only as good as the box placement. On real_01, 1 px is about 2 index points, so a box placed by eye is less precise than one measured from tick positions. With reference-tick calibration the box only says where to look for the line; the values come from the ticks.
 
 Not validated numerically on real charts: real-chart results are judged visually (no ground truth). The synthetic tests show a manual box equal to the true box is never worse than auto.
 
-Future work: calibrate from two labeled gridlines instead of the box edges, which removes this dependence.
+Calibrating from two labelled ticks per axis instead of the box edges (step 2, "Reference ticks") removes this dependence.
 
 4. Pick the line to extract. The sidebar shows a swatch for each line colour
    found in the plot area; choose one, or "Auto" to use all coloured pixels
@@ -410,12 +454,25 @@ not be used as the bottom edge. One pixel on this chart is about 2 index
 points on y and about 1 minute on x, so a box that is off by a few pixels
 shifts every value by that much.
 
+**Reference ticks instead of box-edge limits.** Give `--xtick PX VAL` twice
+and `--ytick PY VAL` twice (pixel in the full image, and its value) instead of
+`--xmin/--xmax/--ymin/--ymax`. For a matplotlib chart whose x labels 1.0 and
+5.0 are at x = 103 and 553 and y labels 1 and 6 at y = 410 and 75:
+
+```
+python -m src.pipeline chart.png --color 1 --xtick 103 1 --xtick 553 5 --ytick 410 1 --ytick 75 6 --out out.csv
+```
+
+Measure the tick positions on the image (an image viewer that shows the cursor
+position works). The two pixels of an axis must differ.
+
 Other commands:
 
 - `python -m src.generate_samples`: regenerate the synthetic charts
 - `python -m src.generate_samples --robust`: regenerate the harder variants in `samples/robust/`
 - `python -m src.evaluate`: extraction accuracy table, saved to `docs/extraction_results.md`
 - `python -m src.overlay`: overlay images, saved to `docs/overlays/`
+- `python -m src.run_heldout [--ticks]`: re-run the held-out charts (box-edge limits, or reference ticks)
 - `pytest`: run the tests
 
 ## 8. Repository layout

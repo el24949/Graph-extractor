@@ -27,10 +27,12 @@ from src.risk import forecast_with_risk  # noqa: E402
 N_RESAMPLE = 100
 
 
-def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None, box=None):
+def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None, box=None, x_ticks=None, y_ticks=None):
     """Run extraction, overlay, resampling and forecast_with_risk on one image.
 
     box: a manual (left, top, right, bottom) plot box, or None to detect it.
+    x_ticks, y_ticks: two (pixel, value) reference ticks per axis, used instead
+    of the box-edge limits x_ref, y_ref (pass None for those).
 
     Returns a dict of everything the page shows. Raises ValueError with a
     readable message for the failures the page reports.
@@ -38,7 +40,7 @@ def analyze(img_path, x_ref, y_ref, tol_pct, h, target_hue=None, box=None):
     # Pixel run for the overlay, calibrated run for the data. src/ is left
     # unchanged, so this calls the pipeline twice rather than re-mapping.
     px_df, mode, box, box_mode = extract_series(img_path, target_hue=target_hue, box=box)
-    df, *_ = extract_series(img_path, x_ref, y_ref, target_hue=target_hue, box=box)
+    df, *_ = extract_series(img_path, x_ref, y_ref, target_hue=target_hue, box=box, x_ticks=x_ticks, y_ticks=y_ticks)
 
     img = cv2.imread(str(img_path))
     overlay = draw_overlay(img, px_df["px_x"], px_df["px_y"], thickness=2)
@@ -80,6 +82,25 @@ def box_preview(img_bgr, box):
     left, top, right, bottom = box
     thickness = max(1, round(min(img_bgr.shape[:2]) / 300))
     cv2.rectangle(preview, (left, top), (right, bottom), (0, 180, 0), thickness)
+    return cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+
+
+def calibration_preview(img_bgr, box, x_ticks, y_ticks):
+    """RGB copy of the image with the box in green and the reference ticks as
+    lines: vertical blue lines for the x ticks, horizontal orange lines for the
+    y ticks, each labelled with its value."""
+    preview = cv2.cvtColor(box_preview(img_bgr, box), cv2.COLOR_RGB2BGR)
+    height, width = img_bgr.shape[:2]
+    thickness = max(1, round(min(height, width) / 300))
+    scale = max(0.4, min(height, width) / 800)
+    for px, val in x_ticks:
+        x = int(round(px))
+        cv2.line(preview, (x, 0), (x, height - 1), (200, 80, 0), thickness)
+        cv2.putText(preview, f"x={val:g}", (x + 3, int(14 * scale) + 4), cv2.FONT_HERSHEY_SIMPLEX, scale, (200, 80, 0), 1, cv2.LINE_AA)
+    for py, val in y_ticks:
+        y = int(round(py))
+        cv2.line(preview, (0, y), (width - 1, y), (0, 140, 255), thickness)
+        cv2.putText(preview, f"y={val:g}", (3, y - 4), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 140, 255), 1, cv2.LINE_AA)
     return cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
 
 
@@ -134,11 +155,21 @@ def main():
 
     with st.sidebar:
         uploaded = st.file_uploader("Chart image", type=["png", "jpg", "jpeg"])
-        st.caption("Axis values at the edges of the plot area")
-        xmin = st.number_input("xmin", value=0.0)
-        xmax = st.number_input("xmax", value=100.0)
-        ymin = st.number_input("ymin", value=0.0)
-        ymax = st.number_input("ymax", value=100.0)
+        calibration = st.radio(
+            "Calibration",
+            ["Box edges", "Reference ticks"],
+            horizontal=True,
+            help="Box edges: enter the axis values at the edges of the plot box. "
+            "Reference ticks: enter two labelled ticks per axis (pixel position and value); "
+            "the box edges then need no known value.",
+        )
+        use_ticks = calibration == "Reference ticks"
+        if not use_ticks:
+            st.caption("Axis values at the edges of the plot area")
+            xmin = st.number_input("xmin", value=0.0)
+            xmax = st.number_input("xmax", value=100.0)
+            ymin = st.number_input("ymin", value=0.0)
+            ymax = st.number_input("ymax", value=100.0)
         tol_pct = st.slider("Tolerance (% of range)", min_value=1, max_value=30, value=10)
         h = st.slider("Forecast horizon h", min_value=5, max_value=20, value=10)
 
@@ -146,7 +177,7 @@ def main():
         st.info("Upload a line chart image in the sidebar to start.")
         return
 
-    if xmin >= xmax or ymin >= ymax:
+    if not use_ticks and (xmin >= xmax or ymin >= ymax):
         st.error("Axis limits must satisfy xmin < xmax and ymin < ymax.")
         return
 
@@ -199,9 +230,37 @@ def main():
                 "Manual mode is on. Drag the sliders until the green box sits on the plot area, "
                 "then enter the axis values at its edges."
             )
+        # Reference ticks: two (pixel, value) points per axis, in full-image
+        # pixels. They start on the box edges; move them onto labelled ticks.
+        x_ticks = y_ticks = None
+        if use_ticks:
+            start = manual_box or auto_box or default_manual_box(width, height)
+            with st.sidebar:
+                st.caption(f"Reference ticks: pixel (full image, {width} x {height}) and value")
+                x_ticks, y_ticks = [], []
+                for axis, pixels, store in (("x", (start[0], start[2]), x_ticks), ("y", (start[3], start[1]), y_ticks)):
+                    for i, px in enumerate(pixels, 1):
+                        c1, c2 = st.columns(2)
+                        limit = (width if axis == "x" else height) - 1
+                        p = c1.number_input(f"{axis} tick {i} pixel", 0, limit, int(px), key=f"{axis}{i}px-{upload_key}")
+                        v = c2.number_input(f"{axis} tick {i} value", value=float(i - 1) * 100, key=f"{axis}{i}val-{upload_key}")
+                        store.append((p, v))
+                x_ticks, y_ticks = tuple(x_ticks), tuple(y_ticks)
+
+        if manual_box is not None or use_ticks:
+            shown_box = manual_box or auto_box
+            if use_ticks:
+                st.subheader("Calibration preview")
+                st.image(
+                    calibration_preview(img, shown_box, x_ticks, y_ticks),
+                    caption="Green: plot box. Blue: x reference ticks. Orange: y reference ticks. "
+                    "Each line should sit on the tick whose value you entered.",
+                    width="stretch",
+                )
+            else:
+                st.subheader("Plot box preview")
+                st.image(box_preview(img, manual_box), caption=f"Manual box {manual_box}", width="stretch")
         if manual_box is not None:
-            st.subheader("Plot box preview")
-            st.image(box_preview(img, manual_box), caption=f"Manual box {manual_box}", width="stretch")
             # Colours inside the manual box (also validates it).
             _, _, colors = series_colors(tmp.name, box=manual_box)
 
@@ -223,7 +282,10 @@ def main():
         target_hue = colors[choice - 1]["hue"] if choice else None
         chosen = colors[choice - 1]["hex"] if choice else "auto"
 
-        result = analyze(tmp.name, (xmin, xmax), (ymin, ymax), tol_pct, h, target_hue=target_hue, box=manual_box)
+        if use_ticks:
+            result = analyze(tmp.name, None, None, tol_pct, h, target_hue, manual_box, x_ticks, y_ticks)
+        else:
+            result = analyze(tmp.name, (xmin, xmax), (ymin, ymax), tol_pct, h, target_hue=target_hue, box=manual_box)
     except FileNotFoundError:
         st.error("Could not read the image. Is it a valid PNG or JPG?")
         return
@@ -231,6 +293,8 @@ def main():
         msg = str(exc)
         if "Invalid manual box" in msg:
             st.error(f"{msg}. Adjust the sliders in the sidebar.")
+        elif "ticks" in msg and msg.startswith("Invalid"):
+            st.error(f"{msg}. Adjust the reference ticks in the sidebar.")
         elif "No plot area found" in msg or "Invalid plot area" in msg:
             st.error(f"No plot area found: no usable axis lines or gridlines. Details: {msg}")
         elif "chosen colour" in msg:
@@ -255,7 +319,8 @@ def main():
     col2.image(result["overlay_rgb"], caption="Extracted line (red)", width="stretch")
     left, top, right, bottom = result["box"]
     st.write(
-        f"Plot area from: **{result['box_mode']}**; line colour: **{chosen}**; "
+        f"Plot area from: **{result['box_mode']}**; calibration: **{calibration.lower()}**; "
+        f"line colour: **{chosen}**; "
         f"line mask mode: **{result['mode']}**; "
         f"plot box (left, top, right, bottom): "
         f"({left}, {top}, {right}, {bottom}); {len(result['df'])} points extracted"
