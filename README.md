@@ -1,176 +1,93 @@
 # Time Series Graph Extraction & Forecast Risk Tool
 
-Upload an image of a line chart. The tool extracts the plotted data with
-computer vision, forecasts the next points, and estimates **how likely each
-forecasted point is to be wrong**, using rolling forecast validation on the
-extracted history.
+**Upload a picture of a line chart. The tool reads the data from the pixels,
+forecasts the next points, and tells you how likely each forecast is to be wrong.**
 
-> Status: extraction, calibration, forecasting, rolling validation, risk
-> estimation and the Streamlit UI are implemented. Demo video: [in progress].
+- Demo video: [LINK]
+- Repo: [GITHUB LINK]
+- Built for the ODYCEO Annual Project Development assessment (Option 1).
 
-## 1. Problem
+## 1. In 30 seconds
 
-A chart image contains data, but not in a usable form. We want to
-(1) recover the numbers from the pixels, (2) forecast forward, and
-(3) say how much to trust that forecast, with a number instead of a guess.
+1. **Image -> data:** classical computer vision (OpenCV) finds the plot area and traces the line.
+2. **Data -> forecast:** three simple models (naive, ETS, ARIMA) predict the next 10 points.
+3. **Forecast -> risk:** rolling forecast validation pretends to be at earlier times, forecasts, and
+   checks what really happened. The share of misses is the estimated **probability of being wrong**,
+   per forecast step, with a 95% confidence interval.
 
-## 2. Approach (how I thought about it)
+Upload only: no numbers need to be typed. Everything else is optional.
 
-The problem splits into three stages, and each one can fail independently,
-so I built and measured them separately:
+## 2. Requirements checklist
 
-1. **Image -> data.** Classical CV (no deep learning): find the axes, isolate
-   the line, convert pixels to values. Classical methods are transparent,
-   fast, and easy to debug.
-2. **Data -> forecast.** Three simple models (naive, ETS, ARIMA) behind one
-   interface. The point is the validation, not model sophistication.
-3. **Forecast -> risk.** Instead of assuming a model is good, I test it on
-   the past: pretend we are at time *t*, forecast, compare with what really
-   happened, and repeat. The share of past forecasts that missed by more than
-   a tolerance is the estimated probability of being wrong.
+| Requirement | Where |
+|---|---|
+| Upload an image of a time series graph | Streamlit app: `app.py` |
+| Computer vision extracts the data | `src/extract.py`, `src/pipeline.py` |
+| Rolling forecast validation, mean error baseline | `src/validate.py` |
+| Probability that the forecast is wrong | `src/risk.py` |
+| Git repository | [GITHUB LINK] |
+| Technical documentation | this README |
+| Short video demonstration | [VIDEO LINK] |
+| Sample test images | `samples/` (synthetic), `samples/real/`, `samples/real_heldout/` |
+| Ground truth for the samples | `samples/chart_XX_truth.csv` |
+| Evaluation metrics from real runs | section 6 and `docs/` |
 
-**Ground truth first.** I generate synthetic charts from known data, so every
-stage can be scored against the true answer. Extraction code never reads the
-answer key (`*_meta.json`); only the evaluation script does.
+## 3. Quick start (Windows PowerShell)
 
-## 3. Pipeline
+Requires Python 3.13 (what the project was built and tested on).
 
-```
-image -> detect plot area -> isolate line -> pixels -> calibrate -> series
-      -> resample (100 pts) -> rolling validation -> P(wrong) + CI -> forecast
-```
-
-### 3.1 Plot-area detection (`src/extract.py`)
-Grayscale -> threshold dark pixels -> morphological opening with long thin
-horizontal/vertical kernels. Text and the data line are too short to survive;
-the axes survive. Their extent gives the plot box.
-
-To cope with real screenshots it also:
-
-- **Ignores the image border.** Lines starting within 2% of an image edge are
-  screenshot frames or window bars, not axes, and are skipped.
-- **Uses an adaptive darkness threshold.** Thresholds are set relative to the
-  background and tried from strict to loose (on white: 128, 160, 192). The
-  first one that gives a valid box wins. The strict step is the old fixed
-  threshold, so charts that already worked give exactly the same box; looser
-  steps only kick in when nothing is found, e.g. for mid-gray axes. (Otsu was
-  not used because on mostly white charts it also picks up light gridlines and
-  fills, and it would move the threshold on charts that already worked.)
-- **Picks axes by position.** The lowest long horizontal line is the x axis
-  and the leftmost long vertical line is the y axis, so a full box, a zero
-  line or dark gridlines do not confuse it.
-- **Falls back to gridlines.** If no axes are found, it uses the outermost
-  light gridlines (or how far they reach) as the box.
-- **Validates the box.** It fails with a clear error if the bottom is not
-  below the top, the left is not left of the right, the box is tiny (a side
-  under 10% of the image) or covers almost the whole image (over 90%).
-
-It reports which method was used: `axes` or `grid`. Besides the 15 clean
-charts, it is tested on 12 harder synthetic charts in `samples/robust/`
-(`python -m src.generate_samples --robust`): a 10 px dark frame, mid-gray axes,
-gridlines with no axes, and a full box. All boxes are within 3 px.
-
-### 3.2 Line isolation (`src/extract.py`)
-Crop inside the box (3 px inset to drop the axis lines). Keep **colored**
-pixels via HSV saturation (grid and axes are gray). **Fallback:** if there are
-too few colored pixels (black/gray lines), use dark pixels (grayscale < 80).
-
-- **Pick a series by colour.** `find_series_colors` runs k-means (k = 4) on the
-  hue of the saturated pixels inside the box, merges clusters of nearly the
-  same hue, and returns the line colours with their pixel counts. The user
-  picks one (swatches in the app, `--list-colors` / `--color N` on the command
-  line), and it is passed as `target_hue`: only pixels within 20 degrees of
-  that hue are kept. Without a choice ("Auto") all coloured pixels are used.
-- **Follow one line.** Each column's mask is split into vertical runs. Tracking
-  starts in the largest connected component (the main line, not a legend
-  sample), then walks left and right, taking in each column the run closest to
-  the previous column's y and the median row inside that run. A legend sample,
-  a logo or another series in the same column no longer pulls the value off.
-- **No extrapolation.** Empty columns are interpolated only between the first
-  and last columns where the line was found, and only that x-range is
-  returned. A line that ends early is no longer extended flat to the edge.
-
-Tested on 9 more synthetic charts in `samples/robust/`: two crossing lines of
-different colours, a legend sample of the line's colour inside the plot, and a
-line ending before the right edge. Each is extracted with the colour a user
-would pick and must be under 5% RMSE and end within 3 px of the data's end.
-8 of 9 pass; the ninth (`robust_21`, 5.89%) is a known failure from spike
-flattening on a very dense, noisy chart, marked as an expected failure in the
-tests. The 15 main charts give exactly the same results as before.
-
-### 3.3 Calibration (`src/calibrate.py`)
-Linear map from pixels to values using two reference points per axis:
-
-```
-value = v1 + (p - p1) * (v2 - v1) / (p2 - p1)
+```powershell
+git clone [GITHUB LINK]
+cd Graph-extractor
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+streamlit run app.py
 ```
 
-The image y-axis is flipped; passing (bottom, ymin) and (top, ymax) makes
-`p2 - p1` negative, so no special case is needed.
+Then open http://localhost:8501, upload `samples/chart_04.png`, and read the results.
+If a chart has several lines, choose the colour in the sidebar.
 
-The two reference points per axis are one of:
+Other commands:
+- `pytest` runs all tests.
+- `python -m src.evaluate` rebuilds the accuracy table.
+- `python -m src.pipeline samples/chart_04.png --out out.csv` runs extraction from the command line.
 
-- **Relative (default, no input):** the plot box edges, paired with 0 and
-  100. x is then % of the plot width and y is % of the plot height. The
-  output says the units are relative (`df.attrs["units"]`, and the app and
-  command line print it). These are not the chart's real values, but the
-  shape of the series is the same.
-- **Box edges with real limits:** the plot box edges, paired with the axis
-  values the user enters for them (`xmin`/`xmax`/`ymin`/`ymax`).
-- **Reference ticks:** any two labelled ticks or gridlines per axis, given as
-  a pixel position in the full image and its value (`x_ticks`, `y_ticks` in
-  `extract_series`; `--xtick`/`--ytick` on the command line). They go
-  straight to `calibrate`, so the values no longer depend on where the box
-  edges are. The two pixels (and the two values) of an axis must differ.
+## 4. How it works
 
-**Relative units and the risk estimate.** Rolling-validation errors are a %
-of the training range, so P(wrong) should not depend on the units. On the 15
-synthetic charts the chosen model is the same in relative and real units on
-all 15, and P(wrong) is identical on 12 (tested exactly on `chart_04`). On
-the other 3 (`chart_05`, `chart_09`, `chart_13`, all ETS) it differs by at
-most one window per step (0.032) and 0.022 overall, because the ETS and ARIMA
-fits in statsmodels do not converge exactly the same way on rescaled data
-(on `chart_09` ARIMA even fails to converge in a different number of
-windows). The naive model is exactly scale-free.
+```
+image -> find plot area -> isolate line -> calibrate -> resample to 100 points
+      -> rolling validation -> P(wrong) + CI -> forecast with risk per step
+```
 
-On the 15 synthetic charts, ticks placed inside the box and valued as the
-box-edge calibration values them give the same output (tested). Ticks at the
-true positions are better than the detected box edges on every chart (mean
-RMSE 1.30% instead of 1.74%, `chart_01` 4.87% -> 3.40%), because they avoid
-the auto box's 1 px error on the right edge.
+| Stage | What it does | File |
+|---|---|---|
+| Plot area | Finds the axes with morphology on dark pixels. Falls back to gridlines; if neither is found, the user sets a manual box. | `src/extract.py` |
+| Line isolation | Keeps coloured pixels (HSV). Black lines use a dark-pixel fallback. Follows the line column by column, so a legend sample or a logo usually does not pull it off. | `src/extract.py` |
+| Calibration | Linear map from pixels to values: `value = v1 + (p - p1) * (v2 - v1) / (p2 - p1)`. Default is relative units (0-100% of the plot). Real limits or reference ticks are optional. | `src/calibrate.py` |
+| Forecast | Naive, ETS (Holt) and ARIMA(1,1,1). A failed fit falls back to naive and shows a warning. | `src/forecast.py` |
+| Rolling validation | Expanding window: for each cut point t (from 30, every 2), fit on the past, forecast 10 points, compare with the real ones. Error is a % of the training range. | `src/validate.py` |
+| Risk | "Wrong" means error above a tolerance (default 10% of the range). P(wrong) is computed per forecast step with a 95% Wilson interval. The overall value uses a bootstrap. The model with the lowest rolling error is chosen. | `src/risk.py` |
 
-### 3.4 Forecasting (`src/forecast.py`)
-The extracted series has one point per pixel column (hundreds), so it is
-**resampled to 100 evenly spaced points**, which the models assume.
-Models: **naive** (last value), **ETS** (Holt, additive trend, no seasonality),
-**ARIMA(1,1,1)**. No seasonality, since the period is unknown from an image.
-If a statsmodels fit fails or returns NaN, it falls back to naive and warns.
+**Why validate on the past?** It tests the models on data they have not seen,
+so the risk number comes from evidence, not from assumptions.
 
-### 3.5 Rolling validation (`src/validate.py`)
-Expanding window: for each cut point *t* (from `min_train=30`, every
-`step=2`), fit on `y[:t]`, forecast `h=10` points, compare with the real
-`y[t:t+h]`. Error = `|pred - actual| / training_range * 100`, so it is a
-percentage of the chart's scale and comparable across charts. The full error
-matrix `(windows, h)` is kept, not just the mean.
+## 5. Sample data and ground truth
 
-### 3.6 Probability of being wrong (`src/risk.py`)
-- A forecasted point is **wrong** if its error exceeds a user-set tolerance
-  (default 10% of the range).
-- **P(wrong)** = fraction of validation errors above the tolerance, computed
-  **per forecast step**, because 1 step ahead is much easier than 10.
-- **95% confidence intervals**, two kinds:
-  - **Per step: Wilson score interval.** Each step's P(wrong) is a count of
-    misses out of the windows, so Wilson gives a sensible interval even when
-    there are 0 misses (a bootstrap would collapse to [0, 0] there).
-  - **Overall: bootstrap over windows** (2000 resamples of whole windows,
-    fixed seed), since the overall rate pools all steps of a window together.
-- The model with the lowest rolling error is chosen per chart.
+- `samples/chart_01..15.png`: synthetic charts made by `src/generate_samples.py` with fixed seeds.
+- `samples/chart_XX_truth.csv`: the true data behind each chart.
+- `samples/chart_XX_meta.json`: the true plot box and axis limits (the "answer key").
+  The extraction code never reads it. Only tests and `src/evaluate.py` do.
+- `samples/robust/`: harder synthetic charts: a frame, grey axes, gridlines only, a full box,
+  two crossing lines, a legend sample inside the plot, a line ending early.
+- `samples/real/`: 5 real screenshots used to find and fix problems.
+- `samples/real_heldout/`: 4 real charts run once before any fix.
 
-## 4. Results
+## 6. Results
 
-### 4.1 Extraction accuracy (synthetic charts, 15 samples)
-Errors relative to the y-range. Axis limits come from the meta files, **not**
-from reading tick labels.
+### 6.1 Extraction accuracy (15 synthetic charts, from `python -m src.evaluate`)
+
+Error is relative to the y-axis range.
 
 | chart | mode | RMSE% | MAE% |
 |---|---|---:|---:|
@@ -192,20 +109,16 @@ from reading tick labels.
 | **mean** | | **1.74** | **1.34** |
 | **max** | | **4.87** | **3.70** |
 
-Mean RMSE 1.74%, max 4.87% (chart_01, sharp spikes are flattened by the
-per-column median). Overlay example: `docs/overlays/chart_01_overlay.png`.
+`mode` is the line mask used: `color`, or `dark` for the black-line fallback.
 
-**These results are on clean synthetic charts. Real images will be worse.**
+Mean RMSE 1.74%, worst case 4.87% (chart_01, sharp spikes are flattened).
+With reference ticks placed at the true positions (from the meta files) instead of the
+detected box edges, the mean RMSE is 1.30%.
+**These are clean synthetic charts. Real images are worse.**
 
-### 4.2 Rolling validation example (chart_04, trend + seasonal)
-Mean error %: naive 16.8, ETS 25.7, ARIMA 18.6. ETS/ARIMA win for the first
-3-4 steps, then lose to naive because the chart has a seasonal wave neither
-model captures. One chart with overlapping windows is an example, not a
-model ranking.
+### 6.2 Rolling validation and risk (example: chart_04)
 
-### 4.3 Risk output
-chart_04, tolerance 10% of the range. Chosen model: **naive**.
-Overall P(wrong) 0.61, 95% CI [0.53, 0.68] (bootstrap).
+Tolerance 10% of the range. Chosen model: naive. Overall P(wrong) 0.61, 95% CI [0.53, 0.68] (bootstrap).
 
 | step | P(wrong) | 95% CI (Wilson) |
 |---:|---:|---|
@@ -220,323 +133,55 @@ Overall P(wrong) 0.61, 95% CI [0.53, 0.68] (bootstrap).
 | 9 | 0.71 | [0.53, 0.84] |
 | 10 | 0.81 | [0.64, 0.91] |
 
-At step 1 no misses were seen in 31 windows, so P(wrong) is 0, but the Wilson
-interval still allows up to 11%. Zero observed misses does not mean zero risk.
+Reading it: for 1 step ahead the risk is low, and it climbs to about 80% at step 10.
+At step 1 no misses were seen in 31 windows, so the estimate is 0, but the interval still
+allows up to 11%. Zero observed misses does not mean zero risk.
 
-Risk climbs from 0% at step 1 to about 80% at step 10 for this chart.
+### 6.3 Real charts
 
-## 5. Real-chart test
+Judged visually from overlays (no numeric ground truth).
 
-**What we tried.** After the synthetic results, the pipeline was run on five
-real chart screenshots (`samples/real/`): a stock index, NOAA global
-temperatures, an Excel rainfall chart, a matplotlib chart with two lines, and
-a speed-time graph with markers and a dense grid.
+| Test set | Charts | Line traced correctly | Notes |
+|---|---|---|---|
+| Development set | 5 | 3 worked, 1 partly, 1 only with a manual box | Used to find and fix problems |
+| Held-out set | 4 | 3 worked, 0 partly, 1 failed | Run once before any fix |
 
-**First attempt: it failed on all five.** Plot-area detection assumed solid,
-dark axis lines and nothing darker or longer in the image. Three charts
-stopped with "Could not find both axis lines" (no axes, or gray axes). The
-other two returned an invalid box because a screenshot frame or black bar was
-taken as an axis.
+- The failure: a thick black line on a thick black grid cannot be separated.
+- With only box-edge limits typed from tick labels, values were wrong on all 4 held-out charts.
+  Reference-tick calibration gave plausible values on 3 of them (ticks chosen after seeing
+  the results, so no longer held-out); the fourth stays wrong because its line is wrong.
+- n=4 is too small to generalise. Details: `docs/real_results.md`, `docs/real_heldout_results.md`,
+  overlays in `docs/overlays/`.
 
-**Then two fixes, measured after each:** robust plot-area detection (section
-3.1), then robust line isolation with a chosen line colour (section 3.2).
+## 7. Assumptions and limitations
 
-| chart | first version | after detection fix | after line fix (now) | what is still wrong |
-|---|---|---|---|---|
-| `real_01` | failed (error) | failed (error) | **failed (error) on Auto; worked with a manual box** | Auto still finds no plot area (no axes, fill hides the gridlines); with a manual box the line is extracted correctly (section 7, Command line) |
-| `real_02` | failed (wrong output) | partly | **worked** | Logo no longer picked up; red series extracted end to end |
-| `real_03` | failed (error) | worked | **worked** | No flat tail any more; dates must be entered as numbers |
-| `real_04` | failed (wrong output) | partly | **worked (with a colour chosen)** | Each line extracted by its colour; on Auto it still switches lines where they cross |
-| `real_05` | failed (error) | partly | **partly** | Line now right; y axis cut off at the image top, so the box top is the image edge |
-
-Now: 3 worked, 1 partly, and `real_01` fails on Auto but works with a manual
-plot box. Details, sources and the colour used per chart are in
-`docs/real_results.md`; overlays in `docs/overlays/real/`.
-
-![real_04 with the blue colour chosen: the extracted line (red) follows the blue series and ignores the orange one](docs/overlays/real/real_04_overlay.png)
-
-**This is still an honest limitation.** The pipeline was built and tested on
-synthetic charts. The 1-5% extraction errors in section 4 only hold for charts
-like those. Five real screenshots are a small sample: they show the main
-failure modes are now handled when the user picks the line colour, but they do
-not show it works on arbitrary real charts. `real_01` (no axes, filled area)
-still fails automatically and only works with a box set by hand, and charts
-with several lines need a colour to be chosen.
-
-### Held-out test
-
-Four more real charts (`samples/real_heldout/`), never used during
-development, were each run **once, before any fix**, with the normal flow
-(Auto box, Manual only if Auto fails; line colour chosen from the colour list
-before extracting). Auto found a correct box on all four.
-
-**Result: 3 worked, 0 partly, 1 failed.** The failure (`chart3`) is a black
-line on a heavy black grid: the dark fallback cannot tell them apart and the
-tracker follows a gridline.
-
-Separately, the **calibrated numbers were off on all four**, because the axis
-limits were read from the first and last tick labels while the pipeline pairs
-them with the box edges (e.g. a peak at (4, 6) came out as (3.63, 5.72)).
-The limits were read by eye, and two (`xmin` on `chart2` and `chart3`) were
-marked uncertain beforehand.
-
-**After, post-hoc (no longer held-out):** re-calibrated from two measured
-reference ticks per axis (section 3.3), the values look plausible on 3 of 4
-(e.g. that peak comes out as (4.00, 5.96)); `chart3` stays wrong because its
-line is wrong.
-
-The result is judged visually from the overlays; there is no numeric ground
-truth. **n = 4 is too small to generalise.** Details:
-`docs/real_heldout_results.md`; overlays in `docs/overlays/real_heldout/`.
-
-## 6. Assumptions and limitations
-
-- **Axis values are not read from the image.** OCR of tick labels is not
-  implemented (future work). Without input the values are relative (0-100% of
-  the plot box); for real values the user provides two reference values per
-  axis, either at the box edges or at two reference ticks.
-- **Relative units are not quite unit-free for the risk estimate.** The chosen
-  model was the same on all 15 synthetic charts, but P(wrong) differed by up to
-  0.032 per step on 3 of them, because the ETS/ARIMA fits are not exactly scale
-  invariant (section 3.3).
-- **Box-edge limits are easy to get wrong.** They must be the values at the
-  box edges, but people naturally type the first and last tick labels, which
-  usually sit inside the box. On the held-out test this made the numbers wrong
-  on all four charts. Reference ticks avoid this, but their pixel positions
-  have to be read off the image by hand (the app draws them over the image to
-  check), and a tick placed a few pixels off scales every value.
-- One line is extracted at a time; line chart, mostly white background, numeric x-axis.
-- **Real charts work only with help.** Of five real screenshots (section 5),
-  3 worked, 1 partly, and `real_01` fails on Auto but works with a manual box;
-  the charts with several lines need a colour to be chosen. Of four held-out
-  charts, the line was right on 3 and wrong on 1 (a black line on a black
-  grid). These are visual judgements on 9 charts, not a measured accuracy.
-- **Several lines need a colour to be chosen.** On Auto, the tracker can switch
-  to another series where two lines cross. Lines of very similar colours
-  (within about 20 degrees of hue) cannot be separated.
-- **Same-coloured objects in the plot can still interfere.** Tracking follows
-  the run closest to the previous column, so a marker, label or logo of the
-  chosen colour lying right on the line can pull it off for a few columns.
-  Hollow markers give small hooks.
-- **Filled areas can hide gridlines.** When a chart has no axes and a fill
-  under the line, the gridline fallback can fail.
-- **Light backgrounds only.** Thresholds are relative to the background and
-  assume dark lines on a light background; dark-mode charts are not handled.
-- **A manual box depends on the user's accuracy.** The axis values are tied to
-  the box edges, so a box that is a few pixels off shifts or stretches every
-  value (on `real_01`, 1 px is about 2 index points). Placing the edges on
-  labelled gridlines or tick marks helps; the box is only checked to be inside
-  the image, not to be on the plot area.
-- **The automatic box is about 1 px too wide on the right.** On all 15 main
-  charts the detected right edge is 1 px past the true edge (the axis line's
-  last anti-aliased pixel), which slightly stretches x with box-edge
-  calibration. With the exact box the RMSE is lower on every chart, by up to
-  1.2 points (`chart_01`: 4.9% -> 3.6%). Known, not fixed in detection;
-  reference-tick calibration does not depend on the box edges and avoids it.
-- **Black lines on a black grid fail.** The dark fallback keeps every dark
-  pixel, so when the gridlines are as dark and thick as the line, the tracker
-  can follow a gridline instead (held-out `chart3`).
-- **The box ends where the lines end.** If an axis is cut off at the image edge,
-  that edge becomes the box edge, which is not a labelled value.
-- **Hidden stretches are interpolated.** Where another series is drawn over the
-  chosen one, its pixels are missing and those columns are filled in by a
-  straight line. Nothing is extrapolated past the ends.
-- The 15 main test charts hide the top/right border; full boxes, frames, gray
-  axes and gridline-only charts are tested separately in `samples/robust/`.
-- Black/gray lines depend on the dark-pixel fallback (they have no colour to
-  choose); dark text or markers inside the plot area can confuse it.
-- **One value per column flattens sharp spikes.** The middle of a vertical run
-  cuts the tip off a narrow peak. On very dense, noisy charts this pushes the
-  error over 5% (`robust_21`: 5.89%).
-- ARIMA(1,1,1) has no drift; on long horizons it may flatten.
-- No seasonality modeling.
-- **Rolling windows overlap** (`step=2 < h=10`), so they are not independent.
-  Both intervals assume they are: the per-step Wilson interval treats each
-  window as an independent trial, and the overall bootstrap resamples windows
-  as if independent. Both are therefore too narrow (optimistic).
-- The best model is selected on the same errors used to estimate P(wrong),
-  which makes the estimate slightly optimistic.
-- P(wrong) is an **empirical estimate**, not an exact probability. It
-  assumes the future behaves like the past.
-
-## 7. Install and usage
-
-### Install
-
-Requires Python 3.13 (what the project was built and tested on).
-
-```
-python -m venv .venv
-.venv\Scripts\activate          # Windows (cmd); PowerShell: .venv\Scripts\Activate.ps1
-source .venv/bin/activate       # macOS / Linux
-pip install -r requirements.txt
-```
-
-Tick-label reading (OCR) is not implemented (future work), so no OCR library
-is installed. Values are relative unless real axis values are entered by hand.
-
-### Web app
-
-```
-streamlit run app.py
-```
-
-Then open the URL it prints (usually http://localhost:8501).
-
-**Upload only (the default).** Upload a line chart (PNG or JPG) in the
-sidebar. That is all: the page shows the extraction, the forecast and
-P(wrong).
-
-**Values are relative unless you give real ones.** Without axis values, x is
-% of the plot width and y is % of the plot height; the page says so. The
-shape, the chosen model and P(wrong) barely depend on this (the tolerance is a
-% of the range; section 3.3), but the numbers are not the chart's values.
-Reading the tick labels automatically (OCR) is future work.
-
-Optional, in the sidebar:
-
-- **Line to extract.** A swatch for each line colour found in the plot area;
-  choose one, or "Auto" to use all coloured pixels (a black or gray line has
-  no swatch and uses the dark fallback). Choose one when the chart has
-  several lines.
-- **Tolerance** (what counts as "wrong", as % of the range) and the forecast
-  horizon `h`.
-
-**Advanced** (a collapsed section in the sidebar; it opens by itself when the
-plot box is not found):
-
-1. **Axis values:**
-   - **Relative** (default): nothing to enter.
-   - **Real limits (box edges):** the axis values at the edges of the plot
-     box: `xmin`, `xmax`, `ymin`, `ymax`. These must be the values at the box
-     edges, not the first and last tick labels (which are usually inside).
-   - **Reference ticks:** for each axis, two labelled ticks as a pixel
-     position in the full image and its value (e.g. x pixel 103 = 1.0). They
-     start on the box edges. The "Calibration preview" draws them over the
-     image (blue vertical lines for x, orange horizontal lines for y); move
-     each until it sits on the tick whose value you entered. The two pixels of
-     an axis must differ.
-2. **Plot box:** "Auto" detects it. If detection fails, the page shows the
-   error and switches to "Manual", starting from the middle 80% of the image;
-   you can also choose Manual yourself (it then starts from the detected box).
-   Drag the four sliders (left, top, right, bottom, in pixels) until the green
-   box in the live preview sits on the plot area. With real limits, put the
-   edges on gridlines or tick marks whose values you know and enter those
-   values.
-
-**Manual plot box: how it works and what it costs.**
-
-Automatic detection can fail on real charts (no axes, a fill hiding the gridlines, an axis cut off by the image edge). In that case the app shows the error and switches to Manual mode: the user sets the plot box (left, top, right, bottom in pixels) over a live preview.
-
-Design choice: I kept a human-in-the-loop fallback instead of guessing. A wrong automatic box silently gives wrong numbers; a manual box makes the assumption visible.
-
-What the box means: with box-edge calibration, its edges are taken as the axis limits you type, so calibration is only as good as the box placement. On real_01, 1 px is about 2 index points, so a box placed by eye is less precise than one measured from tick positions. With reference-tick calibration the box only says where to look for the line; the values come from the ticks.
-
-Not validated numerically on real charts: real-chart results are judged visually (no ground truth). The synthetic tests show a manual box equal to the true box is never worse than auto.
-
-Calibrating from two labelled ticks per axis instead of the box edges (Advanced, "Reference ticks") removes this dependence.
-
-The page shows the original chart next to the extracted line in red, how the
-plot area was found (`axes`, `grid` or `manual`), the units (relative or axis
-values), the line colour used, the line mask
-mode (`color` or `dark`), the chosen model, the overall P(wrong) with its 95%
-CI, a chart of the series with the forecast, and a table of P(wrong) with CI
-for each forecast step. A button downloads the extracted series as CSV.
-Problems (no axes found, no line found, series too flat) are shown as error
-messages.
-
-To try it on a sample, upload `samples/chart_04.png`. For real values, set
-Advanced > Axis values > Real limits to x from `0` to `299` and y from
-`-33.77` to `62.76` (the values in `chart_04_meta.json`); the chosen model
-(naive) and P(wrong) (0.61) are the same either way.
-
-### Command line
-
-Extract one chart to CSV, image only:
-
-```
-python -m src.pipeline samples/chart_04.png --out out.csv
-```
-
-The values are relative (x in % of the plot width, y in % of the plot
-height), and the command prints `Units: relative ...`. For real values give
-the axis values at the box edges:
-
-```
-python -m src.pipeline samples/chart_04.png --xmin 0 --xmax 299 --ymin -33.77 --ymax 62.76 --out out.csv
-```
-
-or two reference ticks per axis (below). `--pixels` gives the raw pixel path
-(`px_x`, `px_y`) instead.
-
-For a chart with several lines, list the colours and pick one by number:
-
-```
-python -m src.pipeline samples/robust/robust_13.png --list-colors
-python -m src.pipeline samples/robust/robust_13.png --color 2 --out out.csv
-```
-
-If the plot area is not found (or is found wrong), give it by hand with
-`--box L T R B` in pixels. Detection is skipped; the box is only checked to be
-inside the image and not empty. The axis values then refer to the edges of
-your box.
-
-**Example: `real_01` with a manual box.** Automatic detection fails on this
-DAX chart (no axes; the fill hides the gridlines). Measured from the image,
-the y labels 25,200 and 24,800 are centred at rows 40 and 241, and the
-gridlines for 11:00 and 20:00 are at x = 212 and 810 (66.4 px per hour, so
-9:00 is at x = 80). With that box and those values:
-
-```
-python -m src.pipeline samples/real/real_01.png --box 80 40 810 241 --xmin 9 --xmax 20 --ymin 24800 --ymax 25200 --out dax.csv
-```
-
-the extracted line follows the chart closely (overlay:
-`docs/overlays/real/real_01_overlay.png`): about 24,980 at 9:06, a high of
-25,157 at about 15:38, and about 25,087 at the last point, which match what the
-chart shows. The x-values are hours as decimals (14.5 = 14:30). The dotted line
-near the bottom is the previous close (24,806.97), not 24,800, so it should
-not be used as the bottom edge. One pixel on this chart is about 2 index
-points on y and about 1 minute on x, so a box that is off by a few pixels
-shifts every value by that much.
-
-**Reference ticks instead of box-edge limits.** Give `--xtick PX VAL` twice
-and `--ytick PY VAL` twice (pixel in the full image, and its value) instead of
-`--xmin/--xmax/--ymin/--ymax`. For a matplotlib chart whose x labels 1.0 and
-5.0 are at x = 103 and 553 and y labels 1 and 6 at y = 410 and 75:
-
-```
-python -m src.pipeline chart.png --color 1 --xtick 103 1 --xtick 553 5 --ytick 410 1 --ytick 75 6 --out out.csv
-```
-
-Measure the tick positions on the image (an image viewer that shows the cursor
-position works). The two pixels of an axis must differ.
-
-Other commands:
-
-- `python -m src.generate_samples`: regenerate the synthetic charts
-- `python -m src.generate_samples --robust`: regenerate the harder variants in `samples/robust/`
-- `python -m src.evaluate`: extraction accuracy table, saved to `docs/extraction_results.md`
-- `python -m src.overlay`: overlay images, saved to `docs/overlays/`
-- `python -m src.run_heldout [--ticks]`: re-run the held-out charts (box-edge limits, or reference ticks)
-- `pytest`: run the tests
+| Limitation | Effect |
+|---|---|
+| One series per run, line charts, light background | Several lines need a colour picked in the app |
+| Axis labels are not read (no OCR) | Values are relative unless real limits or ticks are given. OCR is future work |
+| Black line on a black grid | Fails (held-out chart3) |
+| Sharp spikes are flattened | Peak tips are cut slightly |
+| Auto box right edge is 1 px too far | Small x stretch. Known, not fixed |
+| Rolling windows overlap (step 2 < horizon 10) | Windows are not independent, so intervals are too narrow |
+| Best model is chosen on the same errors used for P(wrong) | Slightly optimistic |
+| Assumes the future behaves like the past | P(wrong) is an empirical estimate, not an exact probability |
+| No seasonality in the models | Seasonal charts: naive won on 3 of the 4 purely seasonal synthetic charts |
+| ARIMA has no drift term | Trend may flatten on long horizons |
+| Relative vs real units | The model choice is the same on all 15 synthetic charts; P(wrong) differs on 3 of them, by at most one window out of 31 per step |
+| Real-chart results are judged by eye | No numeric ground truth |
 
 ## 8. Repository layout
 
 ```
-app.py      Streamlit web app
-src/        extract, calibrate, pipeline, forecast, validate, risk, evaluate, overlay
-tests/      pytest suites
-samples/    synthetic charts + truth CSV + meta JSON
-samples/robust/  harder synthetic charts: frame, gray axes, gridlines only, full box
-samples/real/  five real chart screenshots (section 5)
-samples/real_heldout/  four held-out real charts, run once (section 5)
-docs/       results tables (synthetic, real), overlays
+app.py          Streamlit app
+src/            extract, calibrate, pipeline, forecast, validate, risk, evaluate, overlay,
+                generate_samples, run_heldout
+tests/          pytest suites
+samples/        charts + truth CSV + meta JSON; robust/, real/, real_heldout/
+docs/           result tables and overlays
 ```
 
-## 9. Development process
+## 9. How this was built
 
-Built with Claude Code as an assistant. I designed the pipeline and the
-validation approach, set the evaluation rules (extraction never reads the
-answer key; fallbacks must fail tests rather than hide bugs), reviewed the
-results, and documented the limitations.
+[WRITE 3-4 SENTENCES YOURSELF: what you designed, what you decided, what you checked and found.]
+Built with Claude Code as an assistant. Tests: 235 passing, 1 known expected failure (robust_21, spike flattening).
