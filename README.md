@@ -232,6 +232,27 @@ not show it works on arbitrary real charts. `real_01` (no axes, filled area)
 still fails automatically and only works with a box set by hand, and charts
 with several lines need a colour to be chosen.
 
+### Held-out test
+
+Four more real charts (`samples/real_heldout/`), never used during
+development, were each run **once, before any fix**, with the normal flow
+(Auto box, Manual only if Auto fails; line colour chosen from the colour list
+before extracting). Auto found a correct box on all four.
+
+**Result: 3 worked, 0 partly, 1 failed.** The failure (`chart3`) is a black
+line on a heavy black grid: the dark fallback cannot tell them apart and the
+tracker follows a gridline.
+
+Separately, the **calibrated numbers were off on all four**, because the axis
+limits were read from the first and last tick labels while the pipeline pairs
+them with the box edges (e.g. a peak at (4, 6) came out as (3.63, 5.72)).
+The limits were read by eye, and two (`xmin` on `chart2` and `chart3`) were
+marked uncertain beforehand.
+
+The result is judged visually from the overlays; there is no numeric ground
+truth. **n = 4 is too small to generalise.** Details:
+`docs/real_heldout_results.md`; overlays in `docs/overlays/real_heldout/`.
+
 ## 6. Assumptions and limitations
 
 - **Axis values are supplied, not read.** OCR of tick labels is not
@@ -406,6 +427,7 @@ tests/      pytest suites
 samples/    synthetic charts + truth CSV + meta JSON
 samples/robust/  harder synthetic charts: frame, gray axes, gridlines only, full box
 samples/real/  five real chart screenshots (section 5)
+samples/real_heldout/  four held-out real charts, run once (section 5)
 docs/       results tables (synthetic, real), overlays
 ```
 
