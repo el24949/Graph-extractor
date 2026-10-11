@@ -45,13 +45,28 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Then open http://localhost:8501, upload `samples/chart_04.png`, and read the results.
+Open the Local URL that Streamlit prints in the terminal (usually http://localhost:8501; if the port is busy, run streamlit run app.py --server.port 8502 instead).
+Then upload samples/chart_04.png and read the results.
 If a chart has several lines, choose the colour in the sidebar.
 
 Other commands:
 - `pytest` runs all tests.
 - `python -m src.evaluate` rebuilds the accuracy table.
 - `python -m src.pipeline samples/chart_04.png --out out.csv` runs extraction from the command line.
+
+### Optional settings
+
+None of these are required: the default is upload only.
+
+| Option (app / command line) | What it does | When to use it |
+|---|---|---|
+| Line to extract (sidebar) / `--color N` | Extracts only one line colour (N = number from `--list-colors`, 1 = largest) | The chart has several lines |
+| `--list-colors` (command line only) | Lists the line colours found in the plot area and exits | To find N for `--color` |
+| Advanced > Plot box > Manual / `--box L T R B` | Sets the plot box in pixels and skips detection | Auto detection fails or picks the wrong area |
+| Advanced > Axis values > Real limits / `--xmin --xmax --ymin --ymax` | Maps the plot box edges to these axis values | You want real values and know the values at the box edges |
+| Advanced > Axis values > Reference ticks / `--xtick PX VAL`, `--ytick PY VAL` (each twice) | Calibrates from two labelled ticks per axis (pixel in the full image, value) | You want real values; more reliable than box-edge limits |
+| `--pixels` (command line only) | Outputs raw pixel coordinates (`px_x`, `px_y`) | Debugging, or your own calibration |
+| Tolerance and Forecast horizon h sliders (app only) | Tolerance: error, as % of the range, above which a forecast counts as wrong (default 10). h: how many points to forecast (default 10) | A stricter or looser definition of "wrong", or a shorter or longer forecast |
 
 ## 4. How it works
 
@@ -83,11 +98,28 @@ so the risk number comes from evidence, not from assumptions.
 - `samples/real/`: 5 real screenshots used to find and fix problems.
 - `samples/real_heldout/`: 4 real charts run once before any fix.
 
+### Sample images
+
+![Synthetic chart chart_04](samples/chart_04.png)
+
+Synthetic input `chart_04` (trend plus seasonality), as uploaded to the app.
+
+![Overlay for chart_04](docs/overlays/chart_04_overlay.png)
+
+The same chart with the extracted line drawn in red on top of the original line (RMSE 0.76% of the y range).
+
+![Overlay for real_02](docs/overlays/real/real_02_overlay.png)
+
+Real chart `real_02` (NOAA temperature anomalies, two lines): the red series is extracted (drawn in magenta), and the green box is the detected plot area.
+
+More charts: [`samples/`](samples/) (synthetic, `robust/`, `real/`, `real_heldout/`); all overlays are in [`docs/overlays/`](docs/overlays/).
+
 ## 6. Results
 
 ### 6.1 Extraction accuracy (15 synthetic charts, from `python -m src.evaluate`)
 
 Error is relative to the y-axis range.
+RMSE (root mean square error) is the typical distance between the extracted line and the true line: square each difference, average, take the square root. Here it is shown as a % of the y-axis range, so charts with different scales compare fairly. MAE is the same idea with the plain average of absolute differences. Lower is better.
 
 | chart | mode | RMSE% | MAE% |
 |---|---|---:|---:|
@@ -110,6 +142,7 @@ Error is relative to the y-axis range.
 | **max** | | **4.87** | **3.70** |
 
 `mode` is the line mask used: `color`, or `dark` for the black-line fallback.
+
 
 Mean RMSE 1.74%, worst case 4.87% (chart_01, sharp spikes are flattened).
 With reference ticks placed at the true positions (from the meta files) instead of the
@@ -183,5 +216,8 @@ docs/           result tables and overlays
 
 ## 9. How this was built
 
-[WRITE 3-4 SENTENCES YOURSELF: what you designed, what you decided, what you checked and found.]
+I split the problem into three stages (image to data, data to forecast, forecast to risk) and built a synthetic chart generator with ground truth so each stage could be measured separately. I chose the validation approach myself: expanding-window rolling validation, error as a percentage of the training range, and a per-step P(wrong) with confidence intervals. When I saw that the bootstrap gave a misleading [0, 0] interval at step 1, I switched the per-step intervals to Wilson. I also set the rules that extraction code never reads the answer key, and that a fallback must fail a test instead of hiding a bug.
+
+I then tested on real charts, found that the pipeline failed on all five at first, and fixed it step by step: robust plot-box detection, line isolation with a colour picker, and a manual box. I ran 4 held-out charts once before any fix, which showed that calibration from tick labels was the weak point, and I documented every limitation that came out of that. I checked results by looking at overlays, which caught real bugs (a loop bug in the chart generator, a newline bug in the CLI).
+
 Built with Claude Code as an assistant. Tests: 235 passing, 1 known expected failure (robust_21, spike flattening).
