@@ -3,9 +3,15 @@
 **Upload a picture of a line chart. The tool reads the data from the pixels,
 forecasts the next points, and tells you how likely each forecast is to be wrong.**
 
-- Demo video: [LINK]
-- Repo: [GITHUB LINK]
+- Demo video: [docs/demo/Graph-extractor_DEMO.mp4](docs/demo/Graph-extractor_DEMO.mp4)
+- Repo: https://github.com/el24949/Graph-extractor
 - Built for the ODYCEO Annual Project Development assessment (Option 1).
+
+## Demo
+
+<video src="https://github.com/el24949/Graph-extractor/raw/main/docs/demo/Graph-extractor_DEMO.mp4" controls width="100%"></video>
+
+If the player does not load, open the video directly: [Graph-extractor_DEMO.mp4](docs/demo/Graph-extractor_DEMO.mp4).
 
 ## 1. In 30 seconds
 
@@ -25,9 +31,9 @@ Upload only: no numbers need to be typed. Everything else is optional.
 | Computer vision extracts the data | `src/extract.py`, `src/pipeline.py` |
 | Rolling forecast validation, mean error baseline | `src/validate.py` |
 | Probability that the forecast is wrong | `src/risk.py` |
-| Git repository | [GITHUB LINK] |
+| Git repository | https://github.com/el24949/Graph-extractor |
 | Technical documentation | this README |
-| Short video demonstration | [VIDEO LINK] |
+| Short video demonstration | [`docs/demo/Graph-extractor_DEMO.mp4`](docs/demo/Graph-extractor_DEMO.mp4) |
 | Sample test images | `samples/` (synthetic), `samples/real/`, `samples/real_heldout/` |
 | Ground truth for the samples | `samples/chart_XX_truth.csv` |
 | Evaluation metrics from real runs | section 6 and `docs/` |
@@ -37,7 +43,7 @@ Upload only: no numbers need to be typed. Everything else is optional.
 Requires Python 3.13 (what the project was built and tested on).
 
 ```powershell
-git clone [GITHUB LINK]
+git clone https://github.com/el24949/Graph-extractor.git
 cd Graph-extractor
 python -m venv .venv
 .venv\Scripts\Activate.ps1
