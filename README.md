@@ -3,15 +3,13 @@
 **Upload a picture of a line chart. The tool reads the data from the pixels,
 forecasts the next points, and tells you how likely each forecast is to be wrong.**
 
-- Demo video: [docs/demo/Graph-extractor_DEMO.mp4](docs/demo/Graph-extractor_DEMO.mp4)
+- Demo video: [docs/demo/DEMO_graph.mp4](docs/demo/DEMO_graph.mp4)
 - Repo: https://github.com/el24949/Graph-extractor
 - Built for the ODYCEO Annual Project Development assessment (Option 1).
 
 ## Demo
 
-<video src="https://github.com/el24949/Graph-extractor/raw/main/docs/demo/Graph-extractor_DEMO.mp4" controls width="100%"></video>
-
-If the player does not load, open the video directly: [Graph-extractor_DEMO.mp4](docs/demo/Graph-extractor_DEMO.mp4).
+Watch the demo video: [DEMO_graph.mp4](docs/demo/DEMO_graph.mp4)
 
 ## 1. In 30 seconds
 
@@ -33,7 +31,7 @@ Upload only: no numbers need to be typed. Everything else is optional.
 | Probability that the forecast is wrong | `src/risk.py` |
 | Git repository | https://github.com/el24949/Graph-extractor |
 | Technical documentation | this README |
-| Short video demonstration | [`docs/demo/Graph-extractor_DEMO.mp4`](docs/demo/Graph-extractor_DEMO.mp4) |
+| Short video demonstration | [`docs/demo/DEMO_graph.mp4`](docs/demo/DEMO_graph.mp4) |
 | Sample test images | `samples/` (synthetic), `samples/real/`, `samples/real_heldout/` |
 | Ground truth for the samples | `samples/chart_XX_truth.csv` |
 | Evaluation metrics from real runs | section 6 and `docs/` |
