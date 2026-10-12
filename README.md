@@ -19,6 +19,8 @@ Watch the demo video: [DEMO_graph.mp4](docs/demo/DEMO_graph.mp4)
    checks what really happened. The share of misses is the estimated **probability of being wrong**,
    per forecast step, with a 95% confidence interval.
 
+P(wrong) is an empirical estimate: the fraction of rolling-validation forecasts, made on the chart’s own past, whose error exceeded the tolerance (default 10% of the training range). It is not a guarantee about the future.
+
 Upload only: no numbers need to be typed. Everything else is optional.
 
 ## 2. Requirements checklist
